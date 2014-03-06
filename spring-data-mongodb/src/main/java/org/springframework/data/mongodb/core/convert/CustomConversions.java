@@ -41,9 +41,6 @@ import org.springframework.data.mapping.model.SimpleTypeHolder;
 import org.springframework.data.mongodb.core.convert.MongoConverters.BigDecimalToStringConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.BigIntegerToStringConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.DBObjectToStringConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.DboObjectToShapeConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.ListToPointConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.ShapeToDbObjectConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.StringToBigDecimalConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.StringToBigIntegerConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.StringToURLConverter;
@@ -107,9 +104,20 @@ public class CustomConversions {
 		this.converters.add(StringToURLConverter.INSTANCE);
 		this.converters.add(DBObjectToStringConverter.INSTANCE);
 
-		this.converters.add(ShapeToDbObjectConverter.INSTANCE);
-		this.converters.add(DboObjectToShapeConverter.INSTANCE);
-		this.converters.add(ListToPointConverter.INSTANCE);
+		this.converters.add(GeoConverters.BoxToDbObjectConverter.INSTANCE);
+		this.converters.add(GeoConverters.PolygonToDbObjectConverter.INSTANCE);
+		this.converters.add(GeoConverters.CircleToDbObjectConverter.INSTANCE);
+		this.converters.add(GeoConverters.LegacyCircleToDbObjectConverter.INSTANCE);
+		this.converters.add(GeoConverters.SphereToDbObjectConverter.INSTANCE);
+
+		this.converters.add(GeoConverters.DbObjectToBoxConverter.INSTANCE);
+		this.converters.add(GeoConverters.DbObjectToPolygonConverter.INSTANCE);
+		this.converters.add(GeoConverters.DbObjectToCircleConverter.INSTANCE);
+		this.converters.add(GeoConverters.DbObjectToLegacyCircleConverter.INSTANCE);
+		this.converters.add(GeoConverters.DbObjectToSphereConverter.INSTANCE);
+
+		this.converters.add(GeoConverters.ListToPointConverter.INSTANCE);
+		this.converters.add(GeoConverters.PointToListConverter.INSTANCE);
 
 		this.converters.addAll(JodaTimeConverters.getConvertersToRegister());
 

@@ -361,7 +361,7 @@ public final class NearQuery {
 			dbObject.put("num", num);
 		}
 
-		dbObject.put("near", point.asList());
+		dbObject.put("near", org.springframework.data.mongodb.core.geo.Point.asList(point));
 		dbObject.put("spherical", spherical);
 
 		return dbObject;

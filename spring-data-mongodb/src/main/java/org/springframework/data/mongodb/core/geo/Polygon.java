@@ -23,6 +23,8 @@ import org.springframework.data.geo.Point;
 /**
  * Simple value object to represent a {@link Polygon}.
  * 
+ * @deprecated As of release 1.5, replaced by {@link org.springframework.data.geo.Point}. This class is scheduled to be
+ *             removed in the next major release.
  * @author Oliver Gierke
  * @author Thomas Darimont
  */
@@ -69,7 +71,7 @@ public class Polygon extends org.springframework.data.geo.Polygon implements Sha
 		List<List<Double>> tuples = new ArrayList<List<Double>>(points.size());
 
 		for (Point point : points) {
-			tuples.add(point.asList());
+			tuples.add(org.springframework.data.mongodb.core.geo.Point.asList(point));
 		}
 
 		return tuples;

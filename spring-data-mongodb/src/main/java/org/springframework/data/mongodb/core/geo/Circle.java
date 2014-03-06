@@ -19,17 +19,30 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.springframework.data.annotation.PersistenceConstructor;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Metrics;
 import org.springframework.data.geo.Point;
+import org.springframework.util.Assert;
 
 /**
- * Represents a geospatial circle value
+ * Represents a geospatial circle value.
+ * <p>
+ * Note: We deliberately do not extend org.springframework.data.geo.Circle because introducing it's distance concept
+ * would break the clients that use the old Circle API.
  * 
  * @author Mark Pollack
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @deprecated As of release 1.5, replaced by {@link org.springframework.data.geo.Circle}. This class is scheduled to be
+ *             removed in the next major release.
  */
 @Deprecated
-public class Circle extends org.springframework.data.geo.Circle implements Shape {
+public class Circle implements Shape {
+
+	public static final String COMMAND = "$center";
+
+	private final Point center;
+	private final double radius;
 
 	/**
 	 * Creates a new {@link Circle} from the given {@link Point} and radius.
@@ -39,11 +52,17 @@ public class Circle extends org.springframework.data.geo.Circle implements Shape
 	 */
 	@PersistenceConstructor
 	public Circle(Point center, double radius) {
-		super(center, radius);
+
+		Assert.notNull(center);
+		Assert.isTrue(radius >= 0, "Radius must not be negative!");
+
+		this.center = center;
+		this.radius = radius;
 	}
 
 	/**
-	 * Creates a new {@link Circle} from the given coordinates and radius.
+	 * Creates a new {@link Circle} from the given coordinates and radius as {@link Distance} with a
+	 * {@link Metrics#NEUTRAL}.
 	 * 
 	 * @param centerX
 	 * @param centerY
@@ -53,6 +72,24 @@ public class Circle extends org.springframework.data.geo.Circle implements Shape
 		this(new Point(centerX, centerY), radius);
 	}
 
+	/**
+	 * Returns the center of the {@link Circle}.
+	 * 
+	 * @return will never be {@literal null}.
+	 */
+	public Point getCenter() {
+		return center;
+	}
+
+	/**
+	 * Returns the radius of the {@link Circle}.
+	 * 
+	 * @return
+	 */
+	public double getRadius() {
+		return radius;
+	}
+
 	/*
 	 * (non-Javadoc)
 	 * @see org.springframework.data.mongodb.core.geo.Shape#asList()
@@ -60,9 +97,8 @@ public class Circle extends org.springframework.data.geo.Circle implements Shape
 	public List<Object> asList() {
 
 		List<Object> result = new ArrayList<Object>();
-		result.add(getCenter().asList());
+		result.add(org.springframework.data.mongodb.core.geo.Point.asList(getCenter()));
 		result.add(getRadius());
-
 		return result;
 	}
 
@@ -71,6 +107,46 @@ public class Circle extends org.springframework.data.geo.Circle implements Shape
 	 * @see org.springframework.data.mongodb.core.geo.Shape#getCommand()
 	 */
 	public String getCommand() {
-		return "$center";
+		return COMMAND;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see java.lang.Object#toString()
+	 */
+	@Override
+	public String toString() {
+		return String.format("Circle [center=%s, radius=%f]", center, radius);
+	}
+
+	/* (non-Javadoc)
+	 * @see java.lang.Object#equals(java.lang.Object)
+	 */
+	@Override
+	public boolean equals(Object obj) {
+
+		if (this == obj) {
+			return true;
+		}
+
+		if (obj == null || !getClass().equals(obj.getClass())) {
+			return false;
+		}
+
+		Circle that = (Circle) obj;
+
+		return this.center.equals(that.center) && this.radius == that.radius;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see java.lang.Object#hashCode()
+	 */
+	@Override
+	public int hashCode() {
+		int result = 17;
+		result += 31 * center.hashCode();
+		result += 31 * radius;
+		return result;
 	}
 }

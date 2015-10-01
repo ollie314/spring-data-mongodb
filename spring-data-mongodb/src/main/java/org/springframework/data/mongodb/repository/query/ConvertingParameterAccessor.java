@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,11 +22,13 @@ import java.util.Iterator;
 import java.util.List;
 
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Range;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Point;
 import org.springframework.data.mongodb.core.convert.MongoWriter;
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.Point;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
+import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.repository.query.ParameterAccessor;
 import org.springframework.data.util.TypeInformation;
 import org.springframework.util.Assert;
@@ -38,6 +40,8 @@ import com.mongodb.DBRef;
  * Custom {@link ParameterAccessor} that uses a {@link MongoWriter} to serialize parameters into Mongo format.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
+ * @author Thomas Darimont
  */
 public class ConvertingParameterAccessor implements MongoParameterAccessor {
 
@@ -94,12 +98,13 @@ public class ConvertingParameterAccessor implements MongoParameterAccessor {
 		return getConvertedValue(delegate.getBindableValue(index), null);
 	}
 
-	/*
+	/* 
 	 * (non-Javadoc)
-	 * @see org.springframework.data.mongodb.repository.MongoParameterAccessor#getMaxDistance()
+	 * @see org.springframework.data.mongodb.repository.query.MongoParameterAccessor#getDistanceRange()
 	 */
-	public Distance getMaxDistance() {
-		return delegate.getMaxDistance();
+	@Override
+	public Range<Distance> getDistanceRange() {
+		return delegate.getDistanceRange();
 	}
 
 	/* 
@@ -108,6 +113,14 @@ public class ConvertingParameterAccessor implements MongoParameterAccessor {
 	 */
 	public Point getGeoNearLocation() {
 		return delegate.getGeoNearLocation();
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.query.MongoParameterAccessor#getFullText()
+	 */
+	public TextCriteria getFullText() {
+		return delegate.getFullText();
 	}
 
 	/**
@@ -204,7 +217,7 @@ public class ConvertingParameterAccessor implements MongoParameterAccessor {
 	/**
 	 * Returns the given object as {@link Collection}. Will do a copy of it if it implements {@link Iterable} or is an
 	 * array. Will return an empty {@link Collection} in case {@literal null} is given. Will wrap all other types into a
-	 * single-element collction
+	 * single-element collection.
 	 * 
 	 * @param source
 	 * @return
@@ -228,6 +241,15 @@ public class ConvertingParameterAccessor implements MongoParameterAccessor {
 		return source.getClass().isArray() ? CollectionUtils.arrayToList(source) : Collections.singleton(source);
 	}
 
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.query.MongoParameterAccessor#getValues()
+	 */
+	@Override
+	public Object[] getValues() {
+		return delegate.getValues();
+	}
+
 	/**
 	 * Custom {@link Iterator} that adds a method to access elements in a converted manner.
 	 * 
@@ -242,4 +264,5 @@ public class ConvertingParameterAccessor implements MongoParameterAccessor {
 		 */
 		Object nextConverted(MongoPersistentProperty property);
 	}
+
 }

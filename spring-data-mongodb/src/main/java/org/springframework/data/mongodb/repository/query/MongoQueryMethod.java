@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,34 +15,38 @@
  */
 package org.springframework.data.mongodb.repository.query;
 
+import java.io.Serializable;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 
 import org.springframework.core.annotation.AnnotationUtils;
+import org.springframework.data.geo.GeoPage;
+import org.springframework.data.geo.GeoResult;
+import org.springframework.data.geo.GeoResults;
 import org.springframework.data.mapping.context.MappingContext;
-import org.springframework.data.mongodb.core.geo.GeoPage;
-import org.springframework.data.mongodb.core.geo.GeoResult;
-import org.springframework.data.mongodb.core.geo.GeoResults;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
+import org.springframework.data.mongodb.repository.Meta;
 import org.springframework.data.mongodb.repository.Query;
 import org.springframework.data.repository.core.RepositoryMetadata;
 import org.springframework.data.repository.query.QueryMethod;
 import org.springframework.data.util.ClassTypeInformation;
 import org.springframework.data.util.TypeInformation;
 import org.springframework.util.Assert;
+import org.springframework.util.ClassUtils;
 import org.springframework.util.StringUtils;
 
 /**
  * Mongo specific implementation of {@link QueryMethod}.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
  */
 public class MongoQueryMethod extends QueryMethod {
 
-	@SuppressWarnings("unchecked") private static final List<Class<?>> GEO_NEAR_RESULTS = Arrays.asList(GeoResult.class,
-			GeoResults.class, GeoPage.class);
+	@SuppressWarnings("unchecked") private static final List<Class<? extends Serializable>> GEO_NEAR_RESULTS = Arrays
+			.asList(GeoResult.class, GeoResults.class, GeoPage.class);
 
 	private final Method method;
 	private final MappingContext<? extends MongoPersistentEntity<?>, MongoPersistentProperty> mappingContext;
@@ -119,14 +123,22 @@ public class MongoQueryMethod extends QueryMethod {
 			Class<?> returnedObjectType = getReturnedObjectType();
 			Class<?> domainClass = getDomainClass();
 
-			MongoPersistentEntity<?> returnedEntity = mappingContext.getPersistentEntity(getReturnedObjectType());
-			MongoPersistentEntity<?> managedEntity = mappingContext.getPersistentEntity(domainClass);
-			returnedEntity = returnedEntity == null ? managedEntity : returnedEntity;
-			MongoPersistentEntity<?> collectionEntity = domainClass.isAssignableFrom(returnedObjectType) ? returnedEntity
-					: managedEntity;
+			if (ClassUtils.isPrimitiveOrWrapper(returnedObjectType)) {
 
-			this.metadata = new SimpleMongoEntityMetadata<Object>((Class<Object>) returnedEntity.getType(),
-					collectionEntity.getCollection());
+				this.metadata = new SimpleMongoEntityMetadata<Object>((Class<Object>) domainClass,
+						mappingContext.getPersistentEntity(domainClass));
+
+			} else {
+
+				MongoPersistentEntity<?> returnedEntity = mappingContext.getPersistentEntity(returnedObjectType);
+				MongoPersistentEntity<?> managedEntity = mappingContext.getPersistentEntity(domainClass);
+				returnedEntity = returnedEntity == null ? managedEntity : returnedEntity;
+				MongoPersistentEntity<?> collectionEntity = domainClass.isAssignableFrom(returnedObjectType) ? returnedEntity
+						: managedEntity;
+
+				this.metadata = new SimpleMongoEntityMetadata<Object>((Class<Object>) returnedEntity.getType(),
+						collectionEntity);
+			}
 		}
 
 		return this.metadata;
@@ -142,7 +154,7 @@ public class MongoQueryMethod extends QueryMethod {
 	}
 
 	/**
-	 * Returns whether te query is a geo near query.
+	 * Returns whether the query is a geo near query.
 	 * 
 	 * @return
 	 */
@@ -152,11 +164,15 @@ public class MongoQueryMethod extends QueryMethod {
 
 	private boolean isGeoNearQuery(Method method) {
 
-		if (GEO_NEAR_RESULTS.contains(method.getReturnType())) {
-			return true;
+		Class<?> returnType = method.getReturnType();
+
+		for (Class<?> type : GEO_NEAR_RESULTS) {
+			if (type.isAssignableFrom(returnType)) {
+				return true;
+			}
 		}
 
-		if (Iterable.class.isAssignableFrom(method.getReturnType())) {
+		if (Iterable.class.isAssignableFrom(returnType)) {
 			TypeInformation<?> from = ClassTypeInformation.fromReturnTypeOf(method);
 			return GeoResult.class.equals(from.getComponentType().getType());
 		}
@@ -175,5 +191,56 @@ public class MongoQueryMethod extends QueryMethod {
 
 	TypeInformation<?> getReturnType() {
 		return ClassTypeInformation.fromReturnTypeOf(method);
+	}
+
+	/**
+	 * @return return true if {@link Meta} annotation is available.
+	 * @since 1.6
+	 */
+	public boolean hasQueryMetaAttributes() {
+		return getMetaAnnotation() != null;
+	}
+
+	/**
+	 * Returns the {@link Meta} annotation that is applied to the method or {@code null} if not available.
+	 * 
+	 * @return
+	 * @since 1.6
+	 */
+	Meta getMetaAnnotation() {
+		return method.getAnnotation(Meta.class);
+	}
+
+	/**
+	 * Returns the {@link org.springframework.data.mongodb.core.query.Meta} attributes to be applied.
+	 * 
+	 * @return never {@literal null}.
+	 * @since 1.6
+	 */
+	public org.springframework.data.mongodb.core.query.Meta getQueryMetaAttributes() {
+
+		Meta meta = getMetaAnnotation();
+		if (meta == null) {
+			return new org.springframework.data.mongodb.core.query.Meta();
+		}
+
+		org.springframework.data.mongodb.core.query.Meta metaAttributes = new org.springframework.data.mongodb.core.query.Meta();
+		if (meta.maxExcecutionTime() > 0) {
+			metaAttributes.setMaxTimeMsec(meta.maxExcecutionTime());
+		}
+
+		if (meta.maxScanDocuments() > 0) {
+			metaAttributes.setMaxScan(meta.maxScanDocuments());
+		}
+
+		if (StringUtils.hasText(meta.comment())) {
+			metaAttributes.setComment(meta.comment());
+		}
+
+		if (meta.snapshot()) {
+			metaAttributes.setSnapshot(meta.snapshot());
+		}
+
+		return metaAttributes;
 	}
 }

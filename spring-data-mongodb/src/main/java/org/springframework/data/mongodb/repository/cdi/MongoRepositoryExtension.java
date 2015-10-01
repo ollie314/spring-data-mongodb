@@ -40,6 +40,7 @@ import org.springframework.data.repository.cdi.CdiRepositoryExtensionSupport;
  * CDI extension to export Mongo repositories.
  * 
  * @author Oliver Gierke
+ * @author Mark Paluch
  */
 public class MongoRepositoryExtension extends CdiRepositoryExtensionSupport {
 
@@ -110,6 +111,7 @@ public class MongoRepositoryExtension extends CdiRepositoryExtensionSupport {
 		}
 
 		// Construct and return the repository bean.
-		return new MongoRepositoryBean<T>(mongoOperations, qualifiers, repositoryType, beanManager);
+		return new MongoRepositoryBean<T>(mongoOperations, qualifiers, repositoryType, beanManager,
+				getCustomImplementationDetector());
 	}
 }

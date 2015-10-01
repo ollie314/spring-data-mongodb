@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import org.springframework.data.mapping.PersistentProperty;
  * @author Oliver Gierke
  * @author Patryk Wasik
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 public interface MongoPersistentProperty extends PersistentProperty<MongoPersistentProperty> {
 
@@ -44,7 +45,7 @@ public interface MongoPersistentProperty extends PersistentProperty<MongoPersist
 	int getFieldOrder();
 
 	/**
-	 * Returns whether the propert is a {@link com.mongodb.DBRef}. If this returns {@literal true} you can expect
+	 * Returns whether the property is a {@link com.mongodb.DBRef}. If this returns {@literal true} you can expect
 	 * {@link #getDBRef()} to return an non-{@literal null} value.
 	 * 
 	 * @return
@@ -58,6 +59,32 @@ public interface MongoPersistentProperty extends PersistentProperty<MongoPersist
 	 * @return
 	 */
 	boolean isExplicitIdProperty();
+
+	/**
+	 * Returns true whether the property indicates the documents language either by having a {@link #getFieldName()} equal
+	 * to {@literal language} or being annotated with {@link Language}.
+	 * 
+	 * @return
+	 * @since 1.6
+	 */
+	boolean isLanguageProperty();
+
+	/**
+	 * Returns true when property being annotated with {@link Language}.
+	 * 
+	 * @return
+	 * @since 1.6.1
+	 */
+	boolean isExplicitLanguageProperty();
+
+	/**
+	 * Returns whether the property holds the documents score calculated by text search. <br/>
+	 * It's marked with {@link TextScore}.
+	 * 
+	 * @return
+	 * @since 1.6
+	 */
+	boolean isTextScoreProperty();
 
 	/**
 	 * Returns the {@link DBRef} if the property is a reference.

@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,20 +21,21 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationListener;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.mapping.PersistentEntity;
-import org.springframework.data.mapping.PropertyHandler;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mapping.context.MappingContextEvent;
 import org.springframework.data.mongodb.MongoDbFactory;
+import org.springframework.data.mongodb.core.MongoExceptionTranslator.MongoDbErrorCodes;
+import org.springframework.data.mongodb.core.index.MongoPersistentEntityIndexResolver.IndexDefinitionHolder;
+import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
-import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.util.Assert;
-import org.springframework.util.StringUtils;
+import org.springframework.util.ObjectUtils;
 
-import com.mongodb.BasicDBObject;
 import com.mongodb.DBObject;
-import com.mongodb.util.JSON;
+import com.mongodb.MongoException;
 
 /**
  * Component that inspects {@link MongoPersistentEntity} instances contained in the given {@link MongoMappingContext}
@@ -45,30 +46,46 @@ import com.mongodb.util.JSON;
  * @author Philipp Schneider
  * @author Johno Crawford
  * @author Laurent Canet
+ * @author Christoph Strobl
  */
-public class MongoPersistentEntityIndexCreator implements
-		ApplicationListener<MappingContextEvent<MongoPersistentEntity<?>, MongoPersistentProperty>> {
+public class MongoPersistentEntityIndexCreator implements ApplicationListener<MappingContextEvent<?, ?>> {
 
 	private static final Logger LOGGER = LoggerFactory.getLogger(MongoPersistentEntityIndexCreator.class);
 
 	private final Map<Class<?>, Boolean> classesSeen = new ConcurrentHashMap<Class<?>, Boolean>();
 	private final MongoDbFactory mongoDbFactory;
 	private final MongoMappingContext mappingContext;
+	private final IndexResolver indexResolver;
 
 	/**
-	 * Creats a new {@link MongoPersistentEntityIndexCreator} for the given {@link MongoMappingContext} and
+	 * Creates a new {@link MongoPersistentEntityIndexCreator} for the given {@link MongoMappingContext} and
 	 * {@link MongoDbFactory}.
 	 * 
-	 * @param mappingContext must not be {@literal null}
-	 * @param mongoDbFactory must not be {@literal null}
+	 * @param mappingContext must not be {@literal null}.
+	 * @param mongoDbFactory must not be {@literal null}.
 	 */
 	public MongoPersistentEntityIndexCreator(MongoMappingContext mappingContext, MongoDbFactory mongoDbFactory) {
+		this(mappingContext, mongoDbFactory, new MongoPersistentEntityIndexResolver(mappingContext));
+	}
+
+	/**
+	 * Creates a new {@link MongoPersistentEntityIndexCreator} for the given {@link MongoMappingContext} and
+	 * {@link MongoDbFactory}.
+	 * 
+	 * @param mappingContext must not be {@literal null}.
+	 * @param mongoDbFactory must not be {@literal null}.
+	 * @param indexResolver must not be {@literal null}.
+	 */
+	public MongoPersistentEntityIndexCreator(MongoMappingContext mappingContext, MongoDbFactory mongoDbFactory,
+			IndexResolver indexResolver) {
 
 		Assert.notNull(mongoDbFactory);
 		Assert.notNull(mappingContext);
+		Assert.notNull(indexResolver);
 
 		this.mongoDbFactory = mongoDbFactory;
 		this.mappingContext = mappingContext;
+		this.indexResolver = indexResolver;
 
 		for (MongoPersistentEntity<?> entity : mappingContext.getPersistentEntities()) {
 			checkForIndexes(entity);
@@ -79,7 +96,7 @@ public class MongoPersistentEntityIndexCreator implements
 	 * (non-Javadoc)
 	 * @see org.springframework.context.ApplicationListener#onApplicationEvent(org.springframework.context.ApplicationEvent)
 	 */
-	public void onApplicationEvent(MappingContextEvent<MongoPersistentEntity<?>, MongoPersistentProperty> event) {
+	public void onApplicationEvent(MappingContextEvent<?, ?> event) {
 
 		if (!event.wasEmittedBy(mappingContext)) {
 			return;
@@ -89,88 +106,62 @@ public class MongoPersistentEntityIndexCreator implements
 
 		// Double check type as Spring infrastructure does not consider nested generics
 		if (entity instanceof MongoPersistentEntity) {
-			checkForIndexes(event.getPersistentEntity());
+			checkForIndexes((MongoPersistentEntity<?>) entity);
 		}
 	}
 
-	protected void checkForIndexes(final MongoPersistentEntity<?> entity) {
-		final Class<?> type = entity.getType();
+	private void checkForIndexes(final MongoPersistentEntity<?> entity) {
+
+		Class<?> type = entity.getType();
+
 		if (!classesSeen.containsKey(type)) {
+
+			this.classesSeen.put(type, Boolean.TRUE);
+
 			if (LOGGER.isDebugEnabled()) {
 				LOGGER.debug("Analyzing class " + type + " for index information.");
 			}
 
-			// Make sure indexes get created
-			if (type.isAnnotationPresent(CompoundIndexes.class)) {
-				CompoundIndexes indexes = type.getAnnotation(CompoundIndexes.class);
-				for (CompoundIndex index : indexes.value()) {
+			checkForAndCreateIndexes(entity);
+		}
+	}
 
-					String indexColl = StringUtils.hasText(index.collection()) ? index.collection() : entity.getCollection();
-					DBObject definition = (DBObject) JSON.parse(index.def());
+	private void checkForAndCreateIndexes(MongoPersistentEntity<?> entity) {
 
-					ensureIndex(indexColl, index.name(), definition, index.unique(), index.dropDups(), index.sparse(),
-							index.background(), index.expireAfterSeconds());
+		if (entity.findAnnotation(Document.class) != null) {
+			for (IndexDefinitionHolder indexToCreate : indexResolver.resolveIndexFor(entity.getTypeInformation())) {
+				createIndex(indexToCreate);
+			}
+		}
+	}
 
-					if (LOGGER.isDebugEnabled()) {
-						LOGGER.debug("Created compound index " + index);
-					}
+	void createIndex(IndexDefinitionHolder indexDefinition) {
+
+		try {
+
+			mongoDbFactory.getDb().getCollection(indexDefinition.getCollection()).createIndex(indexDefinition.getIndexKeys(),
+					indexDefinition.getIndexOptions());
+
+		} catch (MongoException ex) {
+
+			if (MongoDbErrorCodes.isDataIntegrityViolationCode(ex.getCode())) {
+
+				DBObject existingIndex = fetchIndexInformation(indexDefinition);
+				String message = "Cannot create index for '%s' in collection '%s' with keys '%s' and options '%s'.";
+
+				if (existingIndex != null) {
+					message += " Index already defined as '%s'.";
 				}
+
+				throw new DataIntegrityViolationException(
+						String.format(message, indexDefinition.getPath(), indexDefinition.getCollection(),
+								indexDefinition.getIndexKeys(), indexDefinition.getIndexOptions(), existingIndex),
+						ex);
 			}
 
-			entity.doWithProperties(new PropertyHandler<MongoPersistentProperty>() {
-				public void doWithPersistentProperty(MongoPersistentProperty property) {
+			RuntimeException exceptionToThrow = mongoDbFactory.getExceptionTranslator().translateExceptionIfPossible(ex);
 
-					if (property.isAnnotationPresent(Indexed.class)) {
-
-						Indexed index = property.findAnnotation(Indexed.class);
-						String name = index.name();
-
-						if (!StringUtils.hasText(name)) {
-							name = property.getFieldName();
-						} else {
-							if (!name.equals(property.getName()) && index.unique() && !index.sparse()) {
-								// Names don't match, and sparse is not true. This situation will generate an error on the server.
-								if (LOGGER.isWarnEnabled()) {
-									LOGGER.warn("The index name " + name + " doesn't match this property name: " + property.getName()
-											+ ". Setting sparse=true on this index will prevent errors when inserting documents.");
-								}
-							}
-						}
-
-						String collection = StringUtils.hasText(index.collection()) ? index.collection() : entity.getCollection();
-						int direction = index.direction() == IndexDirection.ASCENDING ? 1 : -1;
-						DBObject definition = new BasicDBObject(property.getFieldName(), direction);
-
-						ensureIndex(collection, name, definition, index.unique(), index.dropDups(), index.sparse(),
-								index.background(), index.expireAfterSeconds());
-
-						if (LOGGER.isDebugEnabled()) {
-							LOGGER.debug("Created property index " + index);
-						}
-
-					} else if (property.isAnnotationPresent(GeoSpatialIndexed.class)) {
-
-						GeoSpatialIndexed index = property.findAnnotation(GeoSpatialIndexed.class);
-
-						GeospatialIndex indexObject = new GeospatialIndex(property.getFieldName());
-						indexObject.withMin(index.min()).withMax(index.max());
-						indexObject.named(StringUtils.hasText(index.name()) ? index.name() : property.getName());
-						indexObject.typed(index.type()).withBucketSize(index.bucketSize())
-								.withAdditionalField(index.additionalField());
-
-						String collection = StringUtils.hasText(index.collection()) ? index.collection() : entity.getCollection();
-						mongoDbFactory.getDb().getCollection(collection)
-								.ensureIndex(indexObject.getIndexKeys(), indexObject.getIndexOptions());
-
-						if (LOGGER.isDebugEnabled()) {
-							LOGGER.debug(String.format("Created %s for entity %s in collection %s! ", indexObject, entity.getType(),
-									collection));
-						}
-					}
-				}
-			});
-
-			classesSeen.put(type, true);
+			throw exceptionToThrow != null ? exceptionToThrow : ex;
 		}
 	}
 
@@ -184,32 +175,27 @@ public class MongoPersistentEntityIndexCreator implements
 		return this.mappingContext.equals(context);
 	}
 
-	/**
-	 * Triggers the actual index creation.
-	 * 
-	 * @param collection the collection to create the index in
-	 * @param name the name of the index about to be created
-	 * @param indexDefinition the index definition
-	 * @param unique whether it shall be a unique index
-	 * @param dropDups whether to drop duplicates
-	 * @param sparse sparse or not
-	 * @param background whether the index will be created in the background
-	 * @param expireAfterSeconds the time to live for documents in the collection
-	 */
-	protected void ensureIndex(String collection, String name, DBObject indexDefinition, boolean unique,
-			boolean dropDups, boolean sparse, boolean background, int expireAfterSeconds) {
+	private DBObject fetchIndexInformation(IndexDefinitionHolder indexDefinition) {
 
-		DBObject opts = new BasicDBObject();
-		opts.put("name", name);
-		opts.put("dropDups", dropDups);
-		opts.put("sparse", sparse);
-		opts.put("unique", unique);
-		opts.put("background", background);
-
-		if (expireAfterSeconds != -1) {
-			opts.put("expireAfterSeconds", expireAfterSeconds);
+		if (indexDefinition == null) {
+			return null;
 		}
 
-		mongoDbFactory.getDb().getCollection(collection).ensureIndex(indexDefinition, opts);
+		try {
+
+			Object indexNameToLookUp = indexDefinition.getIndexOptions().get("name");
+
+			for (DBObject index : mongoDbFactory.getDb().getCollection(indexDefinition.getCollection()).getIndexInfo()) {
+				if (ObjectUtils.nullSafeEquals(indexNameToLookUp, index.get("name"))) {
+					return index;
+				}
+			}
+
+		} catch (Exception e) {
+			LOGGER.debug(
+					String.format("Failed to load index information for collection '%s'.", indexDefinition.getCollection()), e);
+		}
+
+		return null;
 	}
 }

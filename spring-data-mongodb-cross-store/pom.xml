@@ -2,22 +2,22 @@
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 
 	<modelVersion>4.0.0</modelVersion>
-	
+
 	<parent>
 		<groupId>org.springframework.data</groupId>
 		<artifactId>spring-data-mongodb-parent</artifactId>
-		<version>1.5.0.BUILD-SNAPSHOT</version>
+		<version>1.9.0.BUILD-SNAPSHOT</version>
 		<relativePath>../pom.xml</relativePath>
 	</parent>
-	
+
 	<artifactId>spring-data-mongodb-cross-store</artifactId>
 	<name>Spring Data MongoDB - Cross-Store Support</name>
-	
+
 	<properties>
-		<jpa>1.0.0.Final</jpa>
+		<jpa>2.0.0</jpa>
 		<hibernate>3.6.10.Final</hibernate>
 	</properties>
-	
+
 	<dependencies>
 
 		<!-- Spring -->
@@ -48,7 +48,7 @@
 		<dependency>
 			<groupId>org.springframework.data</groupId>
 			<artifactId>spring-data-mongodb</artifactId>
-			<version>1.5.0.BUILD-SNAPSHOT</version>
+			<version>1.9.0.BUILD-SNAPSHOT</version>
 		</dependency>
 
 		<dependency>
@@ -56,17 +56,13 @@
 			<artifactId>aspectjrt</artifactId>
 			<version>${aspectj}</version>
 		</dependency>
-		<dependency>
-			<groupId>cglib</groupId>
-			<artifactId>cglib</artifactId>
-			<version>2.2</version>
-		</dependency>
 
 		<!-- JPA -->
 		<dependency>
-			<groupId>org.hibernate.javax.persistence</groupId>
-			<artifactId>hibernate-jpa-2.0-api</artifactId>
+			<groupId>org.eclipse.persistence</groupId>
+			<artifactId>javax.persistence</artifactId>
 			<version>${jpa}</version>
+			<optional>true</optional>
 		</dependency>
 
 		<!-- For Tests -->
@@ -102,7 +98,7 @@
 			<plugin>
 				<groupId>org.codehaus.mojo</groupId>
 				<artifactId>aspectj-maven-plugin</artifactId>
-				<version>1.4</version>
+				<version>1.6</version>
 				<dependencies>
 					<dependency>
 						<groupId>org.aspectj</groupId>
@@ -131,8 +127,10 @@
 							<artifactId>spring-aspects</artifactId>
 						</aspectLibrary>
 					</aspectLibraries>
+					<complianceLevel>${source.level}</complianceLevel>
 					<source>${source.level}</source>
 					<target>${source.level}</target>
+					<xmlConfigured>aop.xml</xmlConfigured>
 				</configuration>
 			</plugin>
 		</plugins>

@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2012 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,15 +25,16 @@ import java.util.List;
 import org.junit.Before;
 import org.junit.Test;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoPage;
+import org.springframework.data.geo.GeoResult;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.geo.Point;
 import org.springframework.data.mongodb.core.User;
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.GeoPage;
-import org.springframework.data.mongodb.core.geo.GeoResult;
-import org.springframework.data.mongodb.core.geo.GeoResults;
-import org.springframework.data.mongodb.core.geo.Point;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.mongodb.repository.Address;
 import org.springframework.data.mongodb.repository.Contact;
+import org.springframework.data.mongodb.repository.Meta;
 import org.springframework.data.mongodb.repository.Person;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.core.support.DefaultRepositoryMetadata;
@@ -42,6 +43,7 @@ import org.springframework.data.repository.core.support.DefaultRepositoryMetadat
  * Unit test for {@link MongoQueryMethod}.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
  */
 public class MongoQueryMethodUnitTests {
 
@@ -120,6 +122,72 @@ public class MongoQueryMethodUnitTests {
 		new MongoQueryMethod(method, new DefaultRepositoryMetadata(SampleRepository2.class), context);
 	}
 
+	/**
+	 * @see DATAMONGO-957
+	 */
+	@Test
+	public void createsMongoQueryMethodWithEmptyMetaCorrectly() throws Exception {
+
+		MongoQueryMethod method = queryMethod("emptyMetaAnnotation");
+		assertThat(method.hasQueryMetaAttributes(), is(true));
+		assertThat(method.getQueryMetaAttributes().hasValues(), is(false));
+	}
+
+	/**
+	 * @see DATAMONGO-957
+	 */
+	@Test
+	public void createsMongoQueryMethodWithMaxExecutionTimeCorrectly() throws Exception {
+
+		MongoQueryMethod method = queryMethod("metaWithMaxExecutionTime");
+		assertThat(method.hasQueryMetaAttributes(), is(true));
+		assertThat(method.getQueryMetaAttributes().getMaxTimeMsec(), is(100L));
+	}
+
+	/**
+	 * @see DATAMONGO-957
+	 */
+	@Test
+	public void createsMongoQueryMethodWithMaxScanCorrectly() throws Exception {
+
+		MongoQueryMethod method = queryMethod("metaWithMaxScan");
+		assertThat(method.hasQueryMetaAttributes(), is(true));
+		assertThat(method.getQueryMetaAttributes().getMaxScan(), is(10L));
+	}
+
+	/**
+	 * @see DATAMONGO-957
+	 */
+	@Test
+	public void createsMongoQueryMethodWithCommentCorrectly() throws Exception {
+
+		MongoQueryMethod method = queryMethod("metaWithComment");
+		assertThat(method.hasQueryMetaAttributes(), is(true));
+		assertThat(method.getQueryMetaAttributes().getComment(), is("foo bar"));
+	}
+
+	/**
+	 * @see DATAMONGO-957
+	 */
+	@Test
+	public void createsMongoQueryMethodWithSnapshotCorrectly() throws Exception {
+
+		MongoQueryMethod method = queryMethod("metaWithSnapshotUsage");
+		assertThat(method.hasQueryMetaAttributes(), is(true));
+		assertThat(method.getQueryMetaAttributes().getSnapshot(), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-1266
+	 */
+	@Test
+	public void fallsBackToRepositoryDomainTypeIfMethodDoesNotReturnADomainType() throws Exception {
+
+		MongoQueryMethod method = queryMethod("deleteByUserName", String.class);
+
+		assertThat(method.getEntityInformation().getJavaType(), is(typeCompatibleWith(User.class)));
+	}
+
 	private MongoQueryMethod queryMethod(String name, Class<?>... parameters) throws Exception {
 		Method method = PersonRepository.class.getMethod(name, parameters);
 		return new MongoQueryMethod(method, new DefaultRepositoryMetadata(PersonRepository.class), context);
@@ -137,6 +205,26 @@ public class MongoQueryMethodUnitTests {
 		GeoResults<User> findByFirstname(String firstname, Point location);
 
 		Collection<GeoResult<User>> findByLastname(String lastname, Point location);
+
+		@Meta
+		List<User> emptyMetaAnnotation();
+
+		@Meta(maxExcecutionTime = 100)
+		List<User> metaWithMaxExecutionTime();
+
+		@Meta(maxScanDocuments = 10)
+		List<User> metaWithMaxScan();
+
+		@Meta(comment = "foo bar")
+		List<User> metaWithComment();
+
+		@Meta(snapshot = true)
+		List<User> metaWithSnapshotUsage();
+
+		/**
+		 * @see DATAMONGO-1266
+		 */
+		void deleteByUserName(String userName);
 	}
 
 	interface SampleRepository extends Repository<Contact, Long> {
@@ -154,4 +242,5 @@ public class MongoQueryMethodUnitTests {
 	interface Customer {
 
 	}
+
 }

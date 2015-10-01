@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@ package org.springframework.data.mongodb.core;
 import static org.springframework.data.domain.Sort.Direction.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.List;
 
 import org.springframework.dao.DataAccessException;
@@ -36,11 +38,13 @@ import com.mongodb.MongoException;
  * @author Mark Pollack
  * @author Oliver Gierke
  * @author Komi Innocent
+ * @author Christoph Strobl
  */
 public class DefaultIndexOperations implements IndexOperations {
 
 	private static final Double ONE = Double.valueOf(1);
 	private static final Double MINUS_ONE = Double.valueOf(-1);
+	private static final Collection<String> TWO_D_IDENTIFIERS = Arrays.asList("2d", "2dsphere");
 
 	private final MongoOperations mongoOperations;
 	private final String collectionName;
@@ -69,9 +73,9 @@ public class DefaultIndexOperations implements IndexOperations {
 			public Object doInCollection(DBCollection collection) throws MongoException, DataAccessException {
 				DBObject indexOptions = indexDefinition.getIndexOptions();
 				if (indexOptions != null) {
-					collection.ensureIndex(indexDefinition.getIndexKeys(), indexOptions);
+					collection.createIndex(indexDefinition.getIndexKeys(), indexOptions);
 				} else {
-					collection.ensureIndex(indexDefinition.getIndexKeys());
+					collection.createIndex(indexDefinition.getIndexKeys());
 				}
 				return null;
 			}
@@ -104,10 +108,12 @@ public class DefaultIndexOperations implements IndexOperations {
 	 * (non-Javadoc)
 	 * @see org.springframework.data.mongodb.core.IndexOperations#resetIndexCache()
 	 */
+	@Deprecated
 	public void resetIndexCache() {
 		mongoOperations.execute(collectionName, new CollectionCallback<Void>() {
 			public Void doInCollection(DBCollection collection) throws MongoException, DataAccessException {
-				collection.resetIndexCache();
+
+				ReflectiveDBCollectionInvoker.resetIndexCache(collection);
 				return null;
 			}
 		});
@@ -140,8 +146,15 @@ public class DefaultIndexOperations implements IndexOperations {
 
 						Object value = keyDbObject.get(key);
 
-						if ("2d".equals(value)) {
+						if (TWO_D_IDENTIFIERS.contains(value)) {
 							indexFields.add(IndexField.geo(key));
+						} else if ("text".equals(value)) {
+
+							DBObject weights = (DBObject) ix.get("weights");
+							for (String fieldName : weights.keySet()) {
+								indexFields.add(IndexField.text(fieldName, Float.valueOf(weights.get(fieldName).toString())));
+							}
+
 						} else {
 
 							Double keyValue = new Double(value.toString());
@@ -159,8 +172,8 @@ public class DefaultIndexOperations implements IndexOperations {
 					boolean unique = ix.containsField("unique") ? (Boolean) ix.get("unique") : false;
 					boolean dropDuplicates = ix.containsField("dropDups") ? (Boolean) ix.get("dropDups") : false;
 					boolean sparse = ix.containsField("sparse") ? (Boolean) ix.get("sparse") : false;
-
-					indexInfoList.add(new IndexInfo(indexFields, name, unique, dropDuplicates, sparse));
+					String language = ix.containsField("default_language") ? (String) ix.get("default_language") : "";
+					indexInfoList.add(new IndexInfo(indexFields, name, unique, dropDuplicates, sparse, language));
 				}
 
 				return indexInfoList;

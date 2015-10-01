@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
@@ -39,56 +40,65 @@ import com.mongodb.DBObject;
  * @author Thomas Risberg
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 public class Query {
 
 	private static final String RESTRICTED_TYPES_KEY = "_$RESTRICTED_TYPES";
 
 	private final Set<Class<?>> restrictedTypes = new HashSet<Class<?>>();
-	private final Map<String, Criteria> criteria = new LinkedHashMap<String, Criteria>();
+	private final Map<String, CriteriaDefinition> criteria = new LinkedHashMap<String, CriteriaDefinition>();
 	private Field fieldSpec;
 	private Sort sort;
 	private int skip;
 	private int limit;
 	private String hint;
 
+	private Meta meta = new Meta();
+
 	/**
-	 * Static factory method to create a {@link Query} using the provided {@link Criteria}.
+	 * Static factory method to create a {@link Query} using the provided {@link CriteriaDefinition}.
 	 * 
-	 * @param criteria must not be {@literal null}.
+	 * @param criteriaDefinition must not be {@literal null}.
 	 * @return
+	 * @since 1.6
 	 */
-	public static Query query(Criteria criteria) {
-		return new Query(criteria);
+	public static Query query(CriteriaDefinition criteriaDefinition) {
+		return new Query(criteriaDefinition);
 	}
 
 	public Query() {}
 
 	/**
-	 * Creates a new {@link Query} using the given {@link Criteria}.
+	 * Creates a new {@link Query} using the given {@link CriteriaDefinition}.
 	 * 
-	 * @param criteria must not be {@literal null}.
+	 * @param criteriaDefinition must not be {@literal null}.
+	 * @since 1.6
 	 */
-	public Query(Criteria criteria) {
-		addCriteria(criteria);
+	public Query(CriteriaDefinition criteriaDefinition) {
+		addCriteria(criteriaDefinition);
 	}
 
 	/**
-	 * Adds the given {@link Criteria} to the current {@link Query}.
+	 * Adds the given {@link CriteriaDefinition} to the current {@link Query}.
 	 * 
-	 * @param criteria must not be {@literal null}.
+	 * @param criteriaDefinition must not be {@literal null}.
 	 * @return
+	 * @since 1.6
 	 */
-	public Query addCriteria(Criteria criteria) {
-		CriteriaDefinition existing = this.criteria.get(criteria.getKey());
-		String key = criteria.getKey();
+	public Query addCriteria(CriteriaDefinition criteriaDefinition) {
+
+		CriteriaDefinition existing = this.criteria.get(criteriaDefinition.getKey());
+		String key = criteriaDefinition.getKey();
+
 		if (existing == null) {
-			this.criteria.put(key, criteria);
+			this.criteria.put(key, criteriaDefinition);
 		} else {
 			throw new InvalidMongoDbApiUsageException("Due to limitations of the com.mongodb.BasicDBObject, "
 					+ "you can't add a second '" + key + "' criteria. " + "Query already contains '"
 					+ existing.getCriteriaObject() + "'.");
 		}
+
 		return this;
 	}
 
@@ -166,7 +176,7 @@ public class Query {
 
 		for (Order order : sort) {
 			if (order.isIgnoreCase()) {
-				throw new IllegalArgumentException(String.format("Gven sort contained an Order for %s with ignore case! "
+				throw new IllegalArgumentException(String.format("Given sort contained an Order for %s with ignore case! "
 						+ "MongoDB does not support sorting ignoreing case currently!", order.getProperty()));
 			}
 		}
@@ -268,8 +278,86 @@ public class Query {
 		return hint;
 	}
 
-	protected List<Criteria> getCriteria() {
-		return new ArrayList<Criteria>(this.criteria.values());
+	/**
+	 * @param maxTimeMsec
+	 * @return
+	 * @see Meta#setMaxTimeMsec(long)
+	 * @since 1.6
+	 */
+	public Query maxTimeMsec(long maxTimeMsec) {
+
+		meta.setMaxTimeMsec(maxTimeMsec);
+		return this;
+	}
+
+	/**
+	 * @param timeout
+	 * @param timeUnit
+	 * @return
+	 * @see Meta#setMaxTime(long, TimeUnit)
+	 * @since 1.6
+	 */
+	public Query maxTime(long timeout, TimeUnit timeUnit) {
+
+		meta.setMaxTime(timeout, timeUnit);
+		return this;
+	}
+
+	/**
+	 * @param maxScan
+	 * @return
+	 * @see Meta#setMaxScan(long)
+	 * @since 1.6
+	 */
+	public Query maxScan(long maxScan) {
+
+		meta.setMaxScan(maxScan);
+		return this;
+	}
+
+	/**
+	 * @param comment
+	 * @return
+	 * @see Meta#setComment(String)
+	 * @since 1.6
+	 */
+	public Query comment(String comment) {
+
+		meta.setComment(comment);
+		return this;
+	}
+
+	/**
+	 * @return
+	 * @see Meta#setSnapshot(boolean)
+	 * @since 1.6
+	 */
+	public Query useSnapshot() {
+
+		meta.setSnapshot(true);
+		return this;
+	}
+
+	/**
+	 * @return never {@literal null}.
+	 * @since 1.6
+	 */
+	public Meta getMeta() {
+		return meta;
+	}
+
+	/**
+	 * @param meta must not be {@literal null}.
+	 * @since 1.6
+	 */
+	public void setMeta(Meta meta) {
+
+		Assert.notNull(meta, "Query meta might be empty but must not be null.");
+		this.meta = meta;
+	}
+
+	protected List<CriteriaDefinition> getCriteria() {
+		return new ArrayList<CriteriaDefinition>(this.criteria.values());
 	}
 
 	/*
@@ -297,16 +385,26 @@ public class Query {
 			return false;
 		}
 
-		Query that = (Query) obj;
+		return querySettingsEquals((Query) obj);
+	}
+
+	/**
+	 * Tests whether the settings of the given {@link Query} are equal to this query.
+	 * 
+	 * @param that
+	 * @return
+	 */
+	protected boolean querySettingsEquals(Query that) {
 
 		boolean criteriaEqual = this.criteria.equals(that.criteria);
-		boolean fieldsEqual = this.fieldSpec == null ? that.fieldSpec == null : this.fieldSpec.equals(that.fieldSpec);
-		boolean sortEqual = this.sort == null ? that.sort == null : this.sort.equals(that.sort);
-		boolean hintEqual = this.hint == null ? that.hint == null : this.hint.equals(that.hint);
+		boolean fieldsEqual = nullSafeEquals(this.fieldSpec, that.fieldSpec);
+		boolean sortEqual = nullSafeEquals(this.sort, that.sort);
+		boolean hintEqual = nullSafeEquals(this.hint, that.hint);
 		boolean skipEqual = this.skip == that.skip;
 		boolean limitEqual = this.limit == that.limit;
+		boolean metaEqual = nullSafeEquals(this.meta, that.meta);
 
-		return criteriaEqual && fieldsEqual && sortEqual && hintEqual && skipEqual && limitEqual;
+		return criteriaEqual && fieldsEqual && sortEqual && hintEqual && skipEqual && limitEqual && metaEqual;
 	}
 
 	/* 
@@ -324,6 +422,7 @@ public class Query {
 		result += 31 * nullSafeHashCode(hint);
 		result += 31 * skip;
 		result += 31 * limit;
+		result += 31 * nullSafeHashCode(meta);
 
 		return result;
 	}

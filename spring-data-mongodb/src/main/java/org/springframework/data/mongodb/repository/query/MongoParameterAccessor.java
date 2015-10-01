@@ -1,5 +1,5 @@
 /*
- * Copyright 2011 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,18 @@
  */
 package org.springframework.data.mongodb.repository.query;
 
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.Point;
+import org.springframework.data.domain.Range;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Point;
+import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.repository.query.ParameterAccessor;
 
 /**
  * Mongo-specific {@link ParameterAccessor} exposing a maximum distance parameter.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
+ * @author Thomas Darimont
  */
 public interface MongoParameterAccessor extends ParameterAccessor {
 
@@ -32,7 +36,7 @@ public interface MongoParameterAccessor extends ParameterAccessor {
 	 * @return the maximum distance to apply to the geo query or {@literal null} if there's no {@link Distance} parameter
 	 *         at all or the given value for it was {@literal null}.
 	 */
-	Distance getMaxDistance();
+	Range<Distance> getDistanceRange();
 
 	/**
 	 * Returns the {@link Point} to use for a geo-near query.
@@ -40,4 +44,20 @@ public interface MongoParameterAccessor extends ParameterAccessor {
 	 * @return
 	 */
 	Point getGeoNearLocation();
+
+	/**
+	 * Returns the {@link TextCriteria} to be used for full text query.
+	 * 
+	 * @return null if not set.
+	 * @since 1.6
+	 */
+	TextCriteria getFullText();
+
+	/**
+	 * Returns the raw parameter values of the underlying query method.
+	 * 
+	 * @return
+	 * @since 1.8
+	 */
+	Object[] getValues();
 }

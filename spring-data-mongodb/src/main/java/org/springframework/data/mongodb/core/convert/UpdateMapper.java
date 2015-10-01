@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2014 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,8 +15,6 @@
  */
 package org.springframework.data.mongodb.core.convert;
 
-import java.util.Arrays;
-import java.util.Iterator;
 import java.util.Map.Entry;
 
 import org.springframework.core.convert.converter.Converter;
@@ -24,11 +22,11 @@ import org.springframework.data.mapping.Association;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
-import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty.PropertyToFieldNameConverter;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update.Modifier;
 import org.springframework.data.mongodb.core.query.Update.Modifiers;
 import org.springframework.data.util.ClassTypeInformation;
-import org.springframework.util.Assert;
+import org.springframework.data.util.TypeInformation;
 
 import com.mongodb.BasicDBObject;
 import com.mongodb.DBObject;
@@ -64,8 +62,8 @@ public class UpdateMapper extends QueryMapper {
 	 */
 	@Override
 	protected Object delegateConvertToMongoType(Object source, MongoPersistentEntity<?> entity) {
-		return entity == null ? super.delegateConvertToMongoType(source, null) : converter.convertToMongoType(source,
-				entity.getTypeInformation());
+		return converter.convertToMongoType(source,
+				entity == null ? ClassTypeInformation.OBJECT : getTypeHintForEntity(source, entity));
 	}
 
 	/*
@@ -79,27 +77,35 @@ public class UpdateMapper extends QueryMapper {
 			return createMapEntry(field, convertSimpleOrDBObject(rawValue, field.getPropertyEntity()));
 		}
 
-		if (!isUpdateModifier(rawValue)) {
-			return super.getMappedObjectForField(field, getMappedValue(field, rawValue));
+		if (isQuery(rawValue)) {
+			return createMapEntry(field,
+					super.getMappedObject(((Query) rawValue).getQueryObject(), field.getPropertyEntity()));
 		}
 
+		if (isUpdateModifier(rawValue)) {
+			return getMappedUpdateModifier(field, rawValue);
+		}
+
+		return super.getMappedObjectForField(field, rawValue);
+	}
+
+	private Entry<String, Object> getMappedUpdateModifier(Field field, Object rawValue) {
 		Object value = null;
 
 		if (rawValue instanceof Modifier) {
 
-			value = getMappedValue((Modifier) rawValue);
+			value = getMappedValue(field, (Modifier) rawValue);
 
 		} else if (rawValue instanceof Modifiers) {
 
 			DBObject modificationOperations = new BasicDBObject();
 
 			for (Modifier modifier : ((Modifiers) rawValue).getModifiers()) {
-				modificationOperations.putAll(getMappedValue(modifier).toMap());
+				modificationOperations.putAll(getMappedValue(field, modifier).toMap());
 			}
 
 			value = modificationOperations;
 		} else {
-
 			throw new IllegalArgumentException(String.format("Unable to map value of type '%s'!", rawValue.getClass()));
 		}
 
@@ -119,10 +125,32 @@ public class UpdateMapper extends QueryMapper {
 		return value instanceof Modifier || value instanceof Modifiers;
 	}
 
-	private DBObject getMappedValue(Modifier modifier) {
+	private boolean isQuery(Object value) {
+		return value instanceof Query;
+	}
 
-		Object value = converter.convertToMongoType(modifier.getValue(), ClassTypeInformation.OBJECT);
+	private DBObject getMappedValue(Field field, Modifier modifier) {
+
+		TypeInformation<?> typeHint = field == null ? ClassTypeInformation.OBJECT : field.getTypeHint();
+
+		Object value = converter.convertToMongoType(modifier.getValue(), typeHint);
 		return new BasicDBObject(modifier.getKey(), value);
+	}
+
+	private TypeInformation<?> getTypeHintForEntity(Object source, MongoPersistentEntity<?> entity) {
+
+		TypeInformation<?> info = entity.getTypeInformation();
+		Class<?> type = info.getActualType().getType();
+
+		if (source == null || type.isInterface() || java.lang.reflect.Modifier.isAbstract(type.getModifiers())) {
+			return info;
+		}
+
+		if (!type.equals(source.getClass())) {
+			return info;
+		}
+
+		return NESTED_DOCUMENT;
 	}
 
 	/* 
@@ -133,8 +161,8 @@ public class UpdateMapper extends QueryMapper {
 	protected Field createPropertyField(MongoPersistentEntity<?> entity, String key,
 			MappingContext<? extends MongoPersistentEntity<?>, MongoPersistentProperty> mappingContext) {
 
-		return entity == null ? super.createPropertyField(entity, key, mappingContext) : //
-				new MetadataBackedUpdateField(entity, key, mappingContext);
+		return entity == null ? super.createPropertyField(entity, key, mappingContext)
+				: new MetadataBackedUpdateField(entity, key, mappingContext);
 	}
 
 	/**
@@ -181,28 +209,36 @@ public class UpdateMapper extends QueryMapper {
 		 */
 		@Override
 		protected Converter<MongoPersistentProperty, String> getPropertyConverter() {
-			return isAssociation() ? new AssociationConverter(getAssociation()) : new UpdatePropertyConverter(key);
+			return new PositionParameterRetainingPropertyKeyConverter(key);
+		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.core.convert.QueryMapper.MetadataBackedField#getAssociationConverter()
+		 */
+		@Override
+		protected Converter<MongoPersistentProperty, String> getAssociationConverter() {
+			return new UpdateAssociationConverter(getAssociation(), key);
 		}
 
 		/**
-		 * Converter to skip all properties after an association property was rendered.
+		 * {@link Converter} retaining positional parameter {@literal $} for {@link Association}s.
 		 * 
-		 * @author Oliver Gierke
+		 * @author Christoph Strobl
 		 */
-		private static class AssociationConverter implements Converter<MongoPersistentProperty, String> {
+		protected static class UpdateAssociationConverter extends AssociationConverter {
 
-			private final MongoPersistentProperty property;
-			private boolean associationFound;
+			private final KeyMapper mapper;
 
 			/**
 			 * Creates a new {@link AssociationConverter} for the given {@link Association}.
 			 * 
 			 * @param association must not be {@literal null}.
 			 */
-			public AssociationConverter(Association<MongoPersistentProperty> association) {
+			public UpdateAssociationConverter(Association<MongoPersistentProperty> association, String key) {
 
-				Assert.notNull(association, "Association must not be null!");
-				this.property = association.getInverse();
+				super(association);
+				this.mapper = new KeyMapper(key);
 			}
 
 			/* 
@@ -211,51 +247,7 @@ public class UpdateMapper extends QueryMapper {
 			 */
 			@Override
 			public String convert(MongoPersistentProperty source) {
-
-				if (associationFound) {
-					return null;
-				}
-
-				if (property.equals(source)) {
-					associationFound = true;
-				}
-
-				return source.getFieldName();
-			}
-		}
-
-		/**
-		 * Special {@link Converter} for {@link MongoPersistentProperty} instances that will concatenate the {@literal $}
-		 * contained in the source update key.
-		 * 
-		 * @author Oliver Gierke
-		 */
-		private static class UpdatePropertyConverter implements Converter<MongoPersistentProperty, String> {
-
-			private final Iterator<String> iterator;
-
-			/**
-			 * Creates a new {@link UpdatePropertyConverter} with the given update key.
-			 * 
-			 * @param updateKey must not be {@literal null} or empty.
-			 */
-			public UpdatePropertyConverter(String updateKey) {
-
-				Assert.hasText(updateKey, "Update key must not be null or empty!");
-
-				this.iterator = Arrays.asList(updateKey.split("\\.")).iterator();
-				this.iterator.next();
-			}
-
-			/* 
-			 * (non-Javadoc)
-			 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
-			 */
-			@Override
-			public String convert(MongoPersistentProperty property) {
-
-				String mappedName = PropertyToFieldNameConverter.INSTANCE.convert(property);
-				return iterator.hasNext() && iterator.next().equals("$") ? String.format("%s.$", mappedName) : mappedName;
+				return super.convert(source) == null ? null : mapper.mapPropertyName(source);
 			}
 		}
 	}

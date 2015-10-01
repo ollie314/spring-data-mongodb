@@ -42,23 +42,33 @@ import org.springframework.dao.DataAccessException;
 import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.Version;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.geo.Point;
 import org.springframework.data.mongodb.MongoDbFactory;
+import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.convert.CustomConversions;
 import org.springframework.data.mongodb.core.convert.DefaultDbRefResolver;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
 import org.springframework.data.mongodb.core.convert.QueryMapper;
 import org.springframework.data.mongodb.core.index.MongoPersistentEntityIndexCreator;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
+import org.springframework.data.mongodb.core.query.BasicQuery;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mongodb.BasicDBObject;
+import com.mongodb.BasicDBObjectBuilder;
+import com.mongodb.CommandResult;
 import com.mongodb.DB;
 import com.mongodb.DBCollection;
+import com.mongodb.DBCursor;
 import com.mongodb.DBObject;
 import com.mongodb.Mongo;
 import com.mongodb.MongoException;
+import com.mongodb.ReadPreference;
 
 /**
  * Unit tests for {@link MongoTemplate}.
@@ -75,6 +85,7 @@ public class MongoTemplateUnitTests extends MongoOperationsUnitTests {
 	@Mock Mongo mongo;
 	@Mock DB db;
 	@Mock DBCollection collection;
+	@Mock DBCursor cursor;
 
 	MongoExceptionTranslator exceptionTranslator = new MongoExceptionTranslator();
 	MappingMongoConverter converter;
@@ -83,14 +94,18 @@ public class MongoTemplateUnitTests extends MongoOperationsUnitTests {
 	@Before
 	public void setUp() {
 
+		when(cursor.copy()).thenReturn(cursor);
 		when(factory.getDb()).thenReturn(db);
 		when(factory.getExceptionTranslator()).thenReturn(exceptionTranslator);
 		when(db.getCollection(Mockito.any(String.class))).thenReturn(collection);
+		when(collection.find(Mockito.any(DBObject.class))).thenReturn(cursor);
+		when(cursor.limit(anyInt())).thenReturn(cursor);
+		when(cursor.sort(Mockito.any(DBObject.class))).thenReturn(cursor);
+		when(cursor.hint(anyString())).thenReturn(cursor);
 
 		this.mappingContext = new MongoMappingContext();
 		this.converter = new MappingMongoConverter(new DefaultDbRefResolver(factory), mappingContext);
 		this.template = new MongoTemplate(factory, converter);
-
 	}
 
 	@Test(expected = IllegalArgumentException.class)
@@ -229,7 +244,7 @@ public class MongoTemplateUnitTests extends MongoOperationsUnitTests {
 				org.mockito.Matchers.isNull(DBObject.class), org.mockito.Matchers.isNull(DBObject.class), eq(false),
 				captor.capture(), eq(false), eq(false));
 
-		Assert.assertThat(captor.getValue().get("$inc"), Is.<Object> is(new BasicDBObject("version", 1)));
+		Assert.assertThat(captor.getValue().get("$inc"), Is.<Object> is(new BasicDBObject("version", 1L)));
 	}
 
 	/**
@@ -280,6 +295,131 @@ public class MongoTemplateUnitTests extends MongoOperationsUnitTests {
 				return ((MongoPersistentEntityIndexCreator) argument).isIndexCreatorFor(mappingContext);
 			}
 		}));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void findAllAndRemoveShouldRetrieveMatchingDocumentsPriorToRemoval() {
+
+		BasicQuery query = new BasicQuery("{'foo':'bar'}");
+		template.findAllAndRemove(query, VersionedEntity.class);
+		verify(collection, times(1)).find(Matchers.eq(query.getQueryObject()));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void findAllAndRemoveShouldRemoveDocumentsReturedByFindQuery() {
+
+		Mockito.when(cursor.hasNext()).thenReturn(true).thenReturn(true).thenReturn(false);
+		Mockito.when(cursor.next()).thenReturn(new BasicDBObject("_id", Integer.valueOf(0)))
+				.thenReturn(new BasicDBObject("_id", Integer.valueOf(1)));
+
+		ArgumentCaptor<DBObject> queryCaptor = ArgumentCaptor.forClass(DBObject.class);
+		BasicQuery query = new BasicQuery("{'foo':'bar'}");
+		template.findAllAndRemove(query, VersionedEntity.class);
+
+		verify(collection, times(1)).remove(queryCaptor.capture());
+
+		DBObject idField = DBObjectTestUtils.getAsDBObject(queryCaptor.getValue(), "_id");
+		assertThat((Object[]) idField.get("$in"), is(new Object[] { Integer.valueOf(0), Integer.valueOf(1) }));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void findAllAndRemoveShouldNotTriggerRemoveIfFindResultIsEmpty() {
+
+		template.findAllAndRemove(new BasicQuery("{'foo':'bar'}"), VersionedEntity.class);
+		verify(collection, never()).remove(Mockito.any(DBObject.class));
+	}
+
+	/**
+	 * @see DATAMONGO-948
+	 */
+	@Test
+	public void sortShouldBeTakenAsIsWhenExecutingQueryWithoutSpecificTypeInformation() {
+
+		Query query = Query.query(Criteria.where("foo").is("bar")).with(new Sort("foo"));
+		template.executeQuery(query, "collection1", new DocumentCallbackHandler() {
+
+			@Override
+			public void processDocument(DBObject dbObject) throws MongoException, DataAccessException {
+				// nothing to do - just a test
+			}
+		});
+
+		ArgumentCaptor<DBObject> captor = ArgumentCaptor.forClass(DBObject.class);
+		verify(cursor, times(1)).sort(captor.capture());
+		assertThat(captor.getValue(), equalTo(new BasicDBObjectBuilder().add("foo", 1).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1166
+	 */
+	@Test
+	public void aggregateShouldHonorReadPreferenceWhenSet() {
+
+		when(db.command(Mockito.any(DBObject.class), Mockito.any(ReadPreference.class))).thenReturn(
+				mock(CommandResult.class));
+		when(db.command(Mockito.any(DBObject.class))).thenReturn(mock(CommandResult.class));
+		template.setReadPreference(ReadPreference.secondary());
+
+		template.aggregate(Aggregation.newAggregation(Aggregation.unwind("foo")), "collection-1", Wrapper.class);
+
+		verify(this.db, times(1)).command(Mockito.any(DBObject.class), eq(ReadPreference.secondary()));
+	}
+
+	/**
+	 * @see DATAMONGO-1166
+	 */
+	@Test
+	public void aggregateShouldIgnoreReadPreferenceWhenNotSet() {
+
+		when(db.command(Mockito.any(DBObject.class), Mockito.any(ReadPreference.class))).thenReturn(
+				mock(CommandResult.class));
+		when(db.command(Mockito.any(DBObject.class))).thenReturn(mock(CommandResult.class));
+
+		template.aggregate(Aggregation.newAggregation(Aggregation.unwind("foo")), "collection-1", Wrapper.class);
+
+		verify(this.db, times(1)).command(Mockito.any(DBObject.class));
+	}
+
+	/**
+	 * @see DATAMONGO-1166
+	 */
+	@Test
+	public void geoNearShouldHonorReadPreferenceWhenSet() {
+
+		when(db.command(Mockito.any(DBObject.class), Mockito.any(ReadPreference.class))).thenReturn(
+				mock(CommandResult.class));
+		when(db.command(Mockito.any(DBObject.class))).thenReturn(mock(CommandResult.class));
+		template.setReadPreference(ReadPreference.secondary());
+
+		NearQuery query = NearQuery.near(new Point(1, 1));
+		template.geoNear(query, Wrapper.class);
+
+		verify(this.db, times(1)).command(Mockito.any(DBObject.class), eq(ReadPreference.secondary()));
+	}
+
+	/**
+	 * @see DATAMONGO-1166
+	 */
+	@Test
+	public void geoNearShouldIgnoreReadPreferenceWhenNotSet() {
+
+		when(db.command(Mockito.any(DBObject.class), Mockito.any(ReadPreference.class))).thenReturn(
+				mock(CommandResult.class));
+		when(db.command(Mockito.any(DBObject.class))).thenReturn(mock(CommandResult.class));
+
+		NearQuery query = NearQuery.near(new Point(1, 1));
+		template.geoNear(query, Wrapper.class);
+
+		verify(this.db, times(1)).command(Mockito.any(DBObject.class));
 	}
 
 	class AutogenerateableId {

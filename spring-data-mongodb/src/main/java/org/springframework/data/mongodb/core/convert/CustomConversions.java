@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,13 +17,15 @@ package org.springframework.data.mongodb.core.convert;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,17 +37,23 @@ import org.springframework.core.convert.converter.GenericConverter;
 import org.springframework.core.convert.converter.GenericConverter.ConvertiblePair;
 import org.springframework.core.convert.support.GenericConversionService;
 import org.springframework.data.convert.JodaTimeConverters;
+import org.springframework.data.convert.Jsr310Converters;
 import org.springframework.data.convert.ReadingConverter;
+import org.springframework.data.convert.ThreeTenBackPortConverters;
 import org.springframework.data.convert.WritingConverter;
 import org.springframework.data.mapping.model.SimpleTypeHolder;
 import org.springframework.data.mongodb.core.convert.MongoConverters.BigDecimalToStringConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.BigIntegerToStringConverter;
+import org.springframework.data.mongodb.core.convert.MongoConverters.NamedMongoScriptToDBObjectConverter;
+import org.springframework.data.mongodb.core.convert.MongoConverters.DBObjectToNamedMongoScriptCoverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.DBObjectToStringConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.StringToBigDecimalConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.StringToBigIntegerConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.StringToURLConverter;
+import org.springframework.data.mongodb.core.convert.MongoConverters.TermToStringConverter;
 import org.springframework.data.mongodb.core.convert.MongoConverters.URLToStringConverter;
 import org.springframework.data.mongodb.core.mapping.MongoSimpleTypes;
+import org.springframework.data.util.CacheValue;
 import org.springframework.util.Assert;
 
 /**
@@ -57,6 +65,7 @@ import org.springframework.util.Assert;
  * 
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 public class CustomConversions {
 
@@ -68,9 +77,12 @@ public class CustomConversions {
 	private final Set<ConvertiblePair> writingPairs;
 	private final Set<Class<?>> customSimpleTypes;
 	private final SimpleTypeHolder simpleTypeHolder;
-	private final ConcurrentMap<ConvertiblePair, CacheValue> customReadTargetTypes;
 
 	private final List<Object> converters;
+
+	private final Map<ConvertiblePair, CacheValue<Class<?>>> customReadTargetTypes;
+	private final Map<ConvertiblePair, CacheValue<Class<?>>> customWriteTargetTypes;
+	private final Map<Class<?>, CacheValue<Class<?>>> rawWriteTargetTypes;
 
 	/**
 	 * Creates an empty {@link CustomConversions} object.
@@ -91,24 +103,38 @@ public class CustomConversions {
 		this.readingPairs = new LinkedHashSet<ConvertiblePair>();
 		this.writingPairs = new LinkedHashSet<ConvertiblePair>();
 		this.customSimpleTypes = new HashSet<Class<?>>();
-		this.customReadTargetTypes = new ConcurrentHashMap<GenericConverter.ConvertiblePair, CacheValue>();
+		this.customReadTargetTypes = new ConcurrentHashMap<ConvertiblePair, CacheValue<Class<?>>>();
+		this.customWriteTargetTypes = new ConcurrentHashMap<ConvertiblePair, CacheValue<Class<?>>>();
+		this.rawWriteTargetTypes = new ConcurrentHashMap<Class<?>, CacheValue<Class<?>>>();
 
-		this.converters = new ArrayList<Object>();
-		this.converters.addAll(converters);
-		this.converters.add(CustomToStringConverter.INSTANCE);
-		this.converters.add(BigDecimalToStringConverter.INSTANCE);
-		this.converters.add(StringToBigDecimalConverter.INSTANCE);
-		this.converters.add(BigIntegerToStringConverter.INSTANCE);
-		this.converters.add(StringToBigIntegerConverter.INSTANCE);
-		this.converters.add(URLToStringConverter.INSTANCE);
-		this.converters.add(StringToURLConverter.INSTANCE);
-		this.converters.add(DBObjectToStringConverter.INSTANCE);
-		this.converters.addAll(JodaTimeConverters.getConvertersToRegister());
+		List<Object> toRegister = new ArrayList<Object>();
 
-		for (Object c : this.converters) {
+		// Add user provided converters to make sure they can override the defaults
+		toRegister.addAll(converters);
+		toRegister.add(CustomToStringConverter.INSTANCE);
+		toRegister.add(BigDecimalToStringConverter.INSTANCE);
+		toRegister.add(StringToBigDecimalConverter.INSTANCE);
+		toRegister.add(BigIntegerToStringConverter.INSTANCE);
+		toRegister.add(StringToBigIntegerConverter.INSTANCE);
+		toRegister.add(URLToStringConverter.INSTANCE);
+		toRegister.add(StringToURLConverter.INSTANCE);
+		toRegister.add(DBObjectToStringConverter.INSTANCE);
+		toRegister.add(TermToStringConverter.INSTANCE);
+		toRegister.add(NamedMongoScriptToDBObjectConverter.INSTANCE);
+		toRegister.add(DBObjectToNamedMongoScriptCoverter.INSTANCE);
+
+		toRegister.addAll(JodaTimeConverters.getConvertersToRegister());
+		toRegister.addAll(GeoConverters.getConvertersToRegister());
+		toRegister.addAll(Jsr310Converters.getConvertersToRegister());
+		toRegister.addAll(ThreeTenBackPortConverters.getConvertersToRegister());
+
+		for (Object c : toRegister) {
 			registerConversion(c);
 		}
 
+		Collections.reverse(toRegister);
+
+		this.converters = Collections.unmodifiableList(toRegister);
 		this.simpleTypeHolder = new SimpleTypeHolder(customSimpleTypes, MongoSimpleTypes.HOLDER);
 	}
 
@@ -227,70 +253,103 @@ public class CustomConversions {
 	 * @param sourceType must not be {@literal null}
 	 * @return
 	 */
-	public Class<?> getCustomWriteTarget(Class<?> sourceType) {
-		return getCustomWriteTarget(sourceType, null);
+	public Class<?> getCustomWriteTarget(final Class<?> sourceType) {
+
+		return getOrCreateAndCache(sourceType, rawWriteTargetTypes, new Producer() {
+
+			@Override
+			public Class<?> get() {
+				return getCustomTarget(sourceType, null, writingPairs);
+			}
+		});
 	}
 
 	/**
-	 * Returns the target type we can write an onject of the given source type to. The returned type might be a subclass
-	 * oth the given expected type though. If {@code expectedTargetType} is {@literal null} we will simply return the
-	 * first target type matching or {@literal null} if no conversion can be found.
+	 * Returns the target type we can readTargetWriteLocl an inject of the given source type to. The returned type might
+	 * be a subclass of the given expected type though. If {@code expectedTargetType} is {@literal null} we will simply
+	 * return the first target type matching or {@literal null} if no conversion can be found.
 	 * 
 	 * @param sourceType must not be {@literal null}
 	 * @param requestedTargetType
 	 * @return
 	 */
-	public Class<?> getCustomWriteTarget(Class<?> sourceType, Class<?> requestedTargetType) {
+	public Class<?> getCustomWriteTarget(final Class<?> sourceType, final Class<?> requestedTargetType) {
 
-		Assert.notNull(sourceType);
+		if (requestedTargetType == null) {
+			return getCustomWriteTarget(sourceType);
+		}
 
-		return getCustomTarget(sourceType, requestedTargetType, writingPairs);
+		return getOrCreateAndCache(new ConvertiblePair(sourceType, requestedTargetType), customWriteTargetTypes,
+				new Producer() {
+
+					@Override
+					public Class<?> get() {
+						return getCustomTarget(sourceType, requestedTargetType, writingPairs);
+					}
+				});
 	}
 
 	/**
-	 * Returns whether we have a custom conversion registered to write into a Mongo native type. The returned type might
-	 * be a subclass of the given expected type though.
+	 * Returns whether we have a custom conversion registered to readTargetWriteLocl into a Mongo native type. The
+	 * returned type might be a subclass of the given expected type though.
 	 * 
 	 * @param sourceType must not be {@literal null}
 	 * @return
 	 */
 	public boolean hasCustomWriteTarget(Class<?> sourceType) {
-
-		Assert.notNull(sourceType);
 		return hasCustomWriteTarget(sourceType, null);
 	}
 
 	/**
-	 * Returns whether we have a custom conversion registered to write an object of the given source type into an object
-	 * of the given Mongo native target type.
+	 * Returns whether we have a custom conversion registered to readTargetWriteLocl an object of the given source type
+	 * into an object of the given Mongo native target type.
 	 * 
 	 * @param sourceType must not be {@literal null}.
 	 * @param requestedTargetType
 	 * @return
 	 */
 	public boolean hasCustomWriteTarget(Class<?> sourceType, Class<?> requestedTargetType) {
-
-		Assert.notNull(sourceType);
 		return getCustomWriteTarget(sourceType, requestedTargetType) != null;
 	}
 
 	/**
-	 * Returns whether we have a custom conversion registered to read the given source into the given target type.
+	 * Returns whether we have a custom conversion registered to readTargetReadLock the given source into the given target
+	 * type.
 	 * 
 	 * @param sourceType must not be {@literal null}
 	 * @param requestedTargetType must not be {@literal null}
 	 * @return
 	 */
 	public boolean hasCustomReadTarget(Class<?> sourceType, Class<?> requestedTargetType) {
-
-		Assert.notNull(sourceType);
-		Assert.notNull(requestedTargetType);
-
 		return getCustomReadTarget(sourceType, requestedTargetType) != null;
 	}
 
 	/**
-	 * Inspects the given {@link ConvertiblePair} for ones that have a source compatible type as source. Additionally
+	 * Returns the actual target type for the given {@code sourceType} and {@code requestedTargetType}. Note that the
+	 * returned {@link Class} could be an assignable type to the given {@code requestedTargetType}.
+	 * 
+	 * @param sourceType must not be {@literal null}.
+	 * @param requestedTargetType can be {@literal null}.
+	 * @return
+	 */
+	private Class<?> getCustomReadTarget(final Class<?> sourceType, final Class<?> requestedTargetType) {
+
+		if (requestedTargetType == null) {
+			return null;
+		}
+
+		return getOrCreateAndCache(new ConvertiblePair(sourceType, requestedTargetType), customReadTargetTypes,
+				new Producer() {
+
+					@Override
+					public Class<?> get() {
+						return getCustomTarget(sourceType, requestedTargetType, readingPairs);
+					}
+				});
+	}
+
+	/**
+	 * Inspects the given {@link ConvertiblePair}s for ones that have a source compatible type as source. Additionally
 	 * checks assignability of the target type if one is given.
 	 * 
 	 * @param sourceType must not be {@literal null}.
@@ -299,10 +358,14 @@ public class CustomConversions {
 	 * @return
 	 */
 	private static Class<?> getCustomTarget(Class<?> sourceType, Class<?> requestedTargetType,
-			Iterable<ConvertiblePair> pairs) {
+			Collection<ConvertiblePair> pairs) {
 
 		Assert.notNull(sourceType);
 		Assert.notNull(pairs);
+
+		if (requestedTargetType != null && pairs.contains(new ConvertiblePair(sourceType, requestedTargetType))) {
+			return requestedTargetType;
+		}
 
 		for (ConvertiblePair typePair : pairs) {
 			if (typePair.getSourceType().isAssignableFrom(sourceType)) {
@@ -317,32 +380,31 @@ public class CustomConversions {
 	}
 
 	/**
-	 * Returns the actual target type for the given {@code sourceType} and {@code requestedTargetType}. Note that the
-	 * returned {@link Class} could be an assignable type to the given {@code requestedTargetType}.
+	 * Will try to find a value for the given key in the given cache or produce one using the given {@link Producer} and
+	 * store it in the cache.
 	 * 
-	 * @param sourceType must not be {@literal null}.
-	 * @param requestedTargetType can be {@literal null}.
+	 * @param key the key to lookup a potentially existing value, must not be {@literal null}.
+	 * @param cache the cache to find the value in, must not be {@literal null}.
+	 * @param producer the {@link Producer} to create values to cache, must not be {@literal null}.
 	 * @return
 	 */
-	private Class<?> getCustomReadTarget(Class<?> sourceType, Class<?> requestedTargetType) {
+	private static <T> Class<?> getOrCreateAndCache(T key, Map<T, CacheValue<Class<?>>> cache, Producer producer) {
 
-		Assert.notNull(sourceType);
+		CacheValue<Class<?>> cacheValue = cache.get(key);
 
-		if (requestedTargetType == null) {
-			return null;
+		if (cacheValue != null) {
+			return cacheValue.getValue();
 		}
 
-		ConvertiblePair lookupKey = new ConvertiblePair(sourceType, requestedTargetType);
-		CacheValue readTargetTypeValue = customReadTargetTypes.get(lookupKey);
+		Class<?> type = producer.get();
+		cache.put(key, CacheValue.<Class<?>> ofNullable(type));
 
-		if (readTargetTypeValue != null) {
-			return readTargetTypeValue.getType();
-		}
+		return type;
+	}
 
-		readTargetTypeValue = CacheValue.of(getCustomTarget(sourceType, requestedTargetType, readingPairs));
-		CacheValue cacheValue = customReadTargetTypes.putIfAbsent(lookupKey, readTargetTypeValue);
+	private interface Producer {
 
-		return cacheValue != null ? cacheValue.getType() : readTargetTypeValue.getType();
+		Class<?> get();
 	}
 
 	@WritingConverter
@@ -360,32 +422,6 @@ public class CustomConversions {
 
 		public Object convert(Object source, TypeDescriptor sourceType, TypeDescriptor targetType) {
 			return source.toString();
-		}
-	}
-
-	/**
-	 * Wrapper to safely store {@literal null} values in the type cache.
-	 * 
-	 * @author Patryk Wasik
-	 * @author Oliver Gierke
-	 * @author Thomas Darimont
-	 */
-	private static class CacheValue {
-
-		private static final CacheValue ABSENT = new CacheValue(null);
-
-		private final Class<?> type;
-
-		public CacheValue(Class<?> type) {
-			this.type = type;
-		}
-
-		public Class<?> getType() {
-			return type;
-		}
-
-		static CacheValue of(Class<?> type) {
-			return type == null ? ABSENT : new CacheValue(type);
 		}
 	}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2002-2013 the original author or authors.
+ * Copyright 2002-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,15 +19,22 @@ import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
+import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.repository.query.QueryMethod;
 import org.springframework.data.repository.query.RepositoryQuery;
 import org.springframework.data.repository.query.parser.PartTree;
+import org.springframework.util.StringUtils;
+
+import com.mongodb.util.JSONParseException;
 
 /**
  * {@link RepositoryQuery} implementation for Mongo.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
+ * @author Thomas Darimont
  */
 public class PartTreeMongoQuery extends AbstractMongoQuery {
 
@@ -39,7 +46,7 @@ public class PartTreeMongoQuery extends AbstractMongoQuery {
 	 * Creates a new {@link PartTreeMongoQuery} from the given {@link QueryMethod} and {@link MongoTemplate}.
 	 * 
 	 * @param method must not be {@literal null}.
-	 * @param template must not be {@literal null}.
+	 * @param mongoOperations must not be {@literal null}.
 	 */
 	public PartTreeMongoQuery(MongoQueryMethod method, MongoOperations mongoOperations) {
 
@@ -66,7 +73,34 @@ public class PartTreeMongoQuery extends AbstractMongoQuery {
 	protected Query createQuery(ConvertingParameterAccessor accessor) {
 
 		MongoQueryCreator creator = new MongoQueryCreator(tree, accessor, context, isGeoNearQuery);
-		return creator.createQuery();
+		Query query = creator.createQuery();
+
+		if (tree.isLimiting()) {
+			query.limit(tree.getMaxResults());
+		}
+
+		TextCriteria textCriteria = accessor.getFullText();
+		if (textCriteria != null) {
+			query.addCriteria(textCriteria);
+		}
+
+		String fieldSpec = this.getQueryMethod().getFieldSpecification();
+
+		if (!StringUtils.hasText(fieldSpec)) {
+			return query;
+		}
+
+		try {
+
+			BasicQuery result = new BasicQuery(query.getQueryObject().toString(), fieldSpec);
+			result.setSortObject(query.getSortObject());
+
+			return result;
+
+		} catch (JSONParseException o_O) {
+			throw new IllegalStateException(String.format("Invalid query or field specification in %s!", getQueryMethod()),
+					o_O);
+		}
 	}
 
 	/* 
@@ -85,5 +119,14 @@ public class PartTreeMongoQuery extends AbstractMongoQuery {
 	@Override
 	protected boolean isCountQuery() {
 		return tree.isCountProjection();
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.query.AbstractMongoQuery#isDeleteQuery()
+	 */
+	@Override
+	protected boolean isDeleteQuery() {
+		return tree.isDelete();
 	}
 }

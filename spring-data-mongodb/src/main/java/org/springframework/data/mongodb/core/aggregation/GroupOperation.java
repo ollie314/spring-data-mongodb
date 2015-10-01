@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2014 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,9 @@ import com.mongodb.DBObject;
 
 /**
  * Encapsulates the aggregation framework {@code $group}-operation.
+ * <p>
+ * We recommend to use the static factory method {@link Aggregation#group(Fields)} instead of creating instances of this
+ * class directly.
  * 
  * @see http://docs.mongodb.org/manual/reference/aggregation/group/#stage._S_group
  * @author Sebastian Herold
@@ -191,6 +194,16 @@ public class GroupOperation implements FieldsExposingAggregationOperation {
 	}
 
 	/**
+	 * Generates an {@link GroupOperationBuilder} for an {@code $last}-expression for the given {@link AggregationExpression}.
+	 * 
+	 * @param expr
+	 * @return
+	 */
+	public GroupOperationBuilder last(AggregationExpression expr) {
+		return newBuilder(GroupOps.LAST, null, expr);
+	}
+
+	/**
 	 * Generates an {@link GroupOperationBuilder} for a {@code $first}-expression for the given field-reference.
 	 * 
 	 * @param reference
@@ -201,6 +214,16 @@ public class GroupOperation implements FieldsExposingAggregationOperation {
 	}
 
 	/**
+	 * Generates an {@link GroupOperationBuilder} for a {@code $first}-expression for the given {@link AggregationExpression}.
+	 * 
+	 * @param expr
+	 * @return
+	 */
+	public GroupOperationBuilder first(AggregationExpression expr) {
+		return newBuilder(GroupOps.FIRST, null, expr);
+	}
+
+	/**
 	 * Generates an {@link GroupOperationBuilder} for an {@code $avg}-expression for the given field-reference.
 	 * 
 	 * @param reference
@@ -208,6 +231,16 @@ public class GroupOperation implements FieldsExposingAggregationOperation {
 	 */
 	public GroupOperationBuilder avg(String reference) {
 		return newBuilder(GroupOps.AVG, reference, null);
+	}
+
+	/**
+	 * Generates an {@link GroupOperationBuilder} for an {@code $avg}-expression for the given {@link AggregationExpression}.
+	 * 
+	 * @param expr
+	 * @return
+	 */
+	public GroupOperationBuilder avg(AggregationExpression expr) {
+		return newBuilder(GroupOps.AVG, null, expr);
 	}
 
 	/**
@@ -245,6 +278,16 @@ public class GroupOperation implements FieldsExposingAggregationOperation {
 	}
 
 	/**
+	 * Generates an {@link GroupOperationBuilder} for an {@code $min}-expression that for the given {@link AggregationExpression}.
+	 * 
+	 * @param expr
+	 * @return
+	 */
+	public GroupOperationBuilder min(AggregationExpression expr) {
+		return newBuilder(GroupOps.MIN, null, expr);
+	}
+
+	/**
 	 * Generates an {@link GroupOperationBuilder} for an {@code $max}-expression that for the given field-reference.
 	 * 
 	 * @param reference
@@ -252,6 +295,16 @@ public class GroupOperation implements FieldsExposingAggregationOperation {
 	 */
 	public GroupOperationBuilder max(String reference) {
 		return newBuilder(GroupOps.MAX, reference, null);
+	}
+
+	/**
+	 * Generates an {@link GroupOperationBuilder} for an {@code $max}-expression that for the given {@link AggregationExpression}.
+	 * 
+	 * @param expr
+	 * @return
+	 */
+	public GroupOperationBuilder max(AggregationExpression expr) {
+		return newBuilder(GroupOps.MAX, null, expr);
 	}
 
 	private GroupOperationBuilder newBuilder(Keyword keyword, String reference, Object value) {
@@ -364,7 +417,21 @@ public class GroupOperation implements FieldsExposingAggregationOperation {
 		}
 
 		public Object getValue(AggregationOperationContext context) {
-			return reference == null ? value : context.getReference(reference).toString();
+
+			if (reference == null) {
+
+				if (value instanceof AggregationExpression) {
+					return ((AggregationExpression) value).toDbObject(context);
+				}
+
+				return value;
+			}
+
+			if (Aggregation.SystemVariable.isReferingToSystemVariable(reference)) {
+				return reference;
+			}
+
+			return context.getReference(reference).toString();
 		}
 
 		@Override

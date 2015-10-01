@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,32 +18,42 @@ package org.springframework.data.mongodb.repository;
 import static java.util.Arrays.*;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
+import static org.springframework.data.geo.Metrics.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
+import org.hamcrest.Matchers;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Range;
 import org.springframework.data.domain.Slice;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.geo.Box;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.GeoPage;
+import org.springframework.data.geo.GeoResults;
+import org.springframework.data.geo.Metric;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Point;
+import org.springframework.data.geo.Polygon;
 import org.springframework.data.mongodb.core.MongoOperations;
-import org.springframework.data.mongodb.core.geo.Box;
-import org.springframework.data.mongodb.core.geo.Circle;
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.GeoPage;
-import org.springframework.data.mongodb.core.geo.GeoResults;
-import org.springframework.data.mongodb.core.geo.Metric;
-import org.springframework.data.mongodb.core.geo.Metrics;
-import org.springframework.data.mongodb.core.geo.Point;
-import org.springframework.data.mongodb.core.geo.Polygon;
+import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.repository.Person.Sex;
+import org.springframework.data.mongodb.repository.SampleEvaluationContextExtension.SampleSecurityContextHolder;
+import org.springframework.data.querydsl.QSort;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 
 /**
@@ -165,8 +175,8 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 	@Test
 	public void executesPagedFinderCorrectly() throws Exception {
 
-		Page<Person> page = repository.findByLastnameLike("*a*", new PageRequest(0, 2, Direction.ASC, "lastname",
-				"firstname"));
+		Page<Person> page = repository.findByLastnameLike("*a*",
+				new PageRequest(0, 2, Direction.ASC, "lastname", "firstname"));
 		assertThat(page.isFirst(), is(true));
 		assertThat(page.isLast(), is(false));
 		assertThat(page.getNumberOfElements(), is(2));
@@ -176,8 +186,8 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 	@Test
 	public void executesPagedFinderWithAnnotatedQueryCorrectly() throws Exception {
 
-		Page<Person> page = repository.findByLastnameLikeWithPageable(".*a.*", new PageRequest(0, 2, Direction.ASC,
-				"lastname", "firstname"));
+		Page<Person> page = repository.findByLastnameLikeWithPageable(".*a.*",
+				new PageRequest(0, 2, Direction.ASC, "lastname", "firstname"));
 		assertThat(page.isFirst(), is(true));
 		assertThat(page.isLast(), is(false));
 		assertThat(page.getNumberOfElements(), is(2));
@@ -301,8 +311,8 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 	@Test
 	public void findsPagedPeopleByPredicate() throws Exception {
 
-		Page<Person> page = repository.findAll(person.lastname.contains("a"), new PageRequest(0, 2, Direction.ASC,
-				"lastname"));
+		Page<Person> page = repository.findAll(person.lastname.contains("a"),
+				new PageRequest(0, 2, Direction.ASC, "lastname"));
 		assertThat(page.isFirst(), is(true));
 		assertThat(page.isLast(), is(false));
 		assertThat(page.getNumberOfElements(), is(2));
@@ -388,8 +398,8 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		dave.setLocation(point);
 		repository.save(dave);
 
-		GeoResults<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73), new Distance(2000,
-				Metrics.KILOMETERS));
+		GeoResults<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73),
+				new Distance(2000, Metrics.KILOMETERS));
 		assertThat(results.getContent().isEmpty(), is(false));
 	}
 
@@ -400,8 +410,8 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		dave.setLocation(point);
 		repository.save(dave);
 
-		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73), new Distance(2000,
-				Metrics.KILOMETERS), new PageRequest(0, 20));
+		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73),
+				new Distance(2000, Metrics.KILOMETERS), new PageRequest(0, 20));
 		assertThat(results.getContent().isEmpty(), is(false));
 
 		// DATAMONGO-607
@@ -611,13 +621,13 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 
 		repository.save(Arrays.asList(dave, oliver, carter, boyd, leroi));
 
-		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73), new Distance(2000,
-				Metrics.KILOMETERS), new PageRequest(1, 2));
+		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73),
+				new Distance(2000, Metrics.KILOMETERS), new PageRequest(1, 2));
 
 		assertThat(results.getContent().isEmpty(), is(false));
 		assertThat(results.getNumberOfElements(), is(2));
-		assertThat(results.isFirstPage(), is(false));
-		assertThat(results.isLastPage(), is(false));
+		assertThat(results.isFirst(), is(false));
+		assertThat(results.isLast(), is(false));
 		assertThat(results.getAverageDistance().getMetric(), is((Metric) Metrics.KILOMETERS));
 		assertThat(results.getAverageDistance().getNormalizedValue(), is(0.0));
 	}
@@ -636,12 +646,12 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 
 		repository.save(Arrays.asList(dave, oliver, carter));
 
-		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73), new Distance(2000,
-				Metrics.KILOMETERS), new PageRequest(1, 2));
+		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73),
+				new Distance(2000, Metrics.KILOMETERS), new PageRequest(1, 2));
 		assertThat(results.getContent().isEmpty(), is(false));
 		assertThat(results.getNumberOfElements(), is(1));
-		assertThat(results.isFirstPage(), is(false));
-		assertThat(results.isLastPage(), is(true));
+		assertThat(results.isFirst(), is(false));
+		assertThat(results.isLast(), is(true));
 		assertThat(results.getAverageDistance().getMetric(), is((Metric) Metrics.KILOMETERS));
 	}
 
@@ -655,13 +665,13 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		dave.setLocation(point);
 		repository.save(dave);
 
-		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73), new Distance(2000,
-				Metrics.KILOMETERS), new PageRequest(0, 2));
+		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73),
+				new Distance(2000, Metrics.KILOMETERS), new PageRequest(0, 2));
 
 		assertThat(results.getContent().isEmpty(), is(false));
 		assertThat(results.getNumberOfElements(), is(1));
-		assertThat(results.isFirstPage(), is(true));
-		assertThat(results.isLastPage(), is(true));
+		assertThat(results.isFirst(), is(true));
+		assertThat(results.isLast(), is(true));
 		assertThat(results.getAverageDistance().getMetric(), is((Metric) Metrics.KILOMETERS));
 	}
 
@@ -674,13 +684,13 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		dave.setLocation(new Point(-73.99171, 40.738868));
 		repository.save(dave);
 
-		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73), new Distance(2000,
-				Metrics.KILOMETERS), new PageRequest(1, 2));
+		GeoPage<Person> results = repository.findByLocationNear(new Point(-73.99, 40.73),
+				new Distance(2000, Metrics.KILOMETERS), new PageRequest(1, 2));
 
 		assertThat(results.getContent().isEmpty(), is(true));
 		assertThat(results.getNumberOfElements(), is(0));
-		assertThat(results.isFirstPage(), is(false));
-		assertThat(results.isLastPage(), is(true));
+		assertThat(results.isFirst(), is(false));
+		assertThat(results.isLast(), is(true));
 		assertThat(results.getAverageDistance().getMetric(), is((Metric) Metrics.KILOMETERS));
 	}
 
@@ -763,8 +773,7 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		assertThat(result, is(arrayWithSize(1)));
 		assertThat(result, is(arrayContaining(leroi)));
 	}
-	
-	
+
 	/**
 	 * @see DATAMONGO-821
 	 */
@@ -781,7 +790,435 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		repository.save(alicia);
 
 		Page<Person> result = repository.findByHavingCreator(new PageRequest(0, 100));
+
 		assertThat(result.getNumberOfElements(), is(1));
 		assertThat(result.getContent().get(0), is(alicia));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByShouldReturnListOfDeletedElementsWhenRetunTypeIsCollectionLike() {
+
+		List<Person> result = repository.deleteByLastname("Beauford");
+
+		assertThat(result, hasItem(carter));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByShouldRemoveElementsMatchingDerivedQuery() {
+
+		repository.deleteByLastname("Beauford");
+
+		assertThat(operations.count(new BasicQuery("{'lastname':'Beauford'}"), Person.class), is(0L));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByShouldReturnNumberOfDocumentsRemovedIfReturnTypeIsLong() {
+		assertThat(repository.deletePersonByLastname("Beauford"), is(1L));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByShouldReturnZeroInCaseNoDocumentHasBeenRemovedAndReturnTypeIsNumber() {
+		assertThat(repository.deletePersonByLastname("dorfuaeB"), is(0L));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByShouldReturnEmptyListInCaseNoDocumentHasBeenRemovedAndReturnTypeIsCollectionLike() {
+		assertThat(repository.deleteByLastname("dorfuaeB"), empty());
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByUsingAnnotatedQueryShouldReturnListOfDeletedElementsWhenRetunTypeIsCollectionLike() {
+
+		List<Person> result = repository.removeByLastnameUsingAnnotatedQuery("Beauford");
+
+		assertThat(result, hasItem(carter));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByUsingAnnotatedQueryShouldRemoveElementsMatchingDerivedQuery() {
+
+		repository.removeByLastnameUsingAnnotatedQuery("Beauford");
+
+		assertThat(operations.count(new BasicQuery("{'lastname':'Beauford'}"), Person.class), is(0L));
+	}
+
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void deleteByUsingAnnotatedQueryShouldReturnNumberOfDocumentsRemovedIfReturnTypeIsLong() {
+		assertThat(repository.removePersonByLastnameUsingAnnotatedQuery("Beauford"), is(1L));
+	}
+
+	/**
+	 * @see DATAMONGO-893
+	 */
+	@Test
+	public void findByNestedPropertyInCollectionShouldFindMatchingDocuments() {
+
+		Person p = new Person("Mary", "Poppins");
+		Address adr = new Address("some", "2", "where");
+		p.setAddress(adr);
+
+		repository.save(p);
+
+		Page<Person> result = repository.findByAddressIn(Arrays.asList(adr), new PageRequest(0, 10));
+
+		assertThat(result.getContent(), hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-745
+	 */
+	@Test
+	public void findByCustomQueryFirstnamesInListAndLastname() {
+
+		repository.save(new Person("foo", "bar"));
+		repository.save(new Person("bar", "bar"));
+		repository.save(new Person("fuu", "bar"));
+		repository.save(new Person("notfound", "bar"));
+
+		Page<Person> result = repository.findByCustomQueryFirstnamesAndLastname(Arrays.asList("bar", "foo", "fuu"), "bar",
+				new PageRequest(0, 2));
+
+		assertThat(result.getContent(), hasSize(2));
+		assertThat(result.getTotalPages(), is(2));
+		assertThat(result.getTotalElements(), is(3L));
+	}
+
+	/**
+	 * @see DATAMONGO-745
+	 */
+	@Test
+	public void findByCustomQueryLastnameAndStreetInList() {
+
+		repository.save(new Person("foo", "bar").withAddress(new Address("street1", "1", "SB")));
+		repository.save(new Person("bar", "bar").withAddress(new Address("street2", "1", "SB")));
+		repository.save(new Person("fuu", "bar").withAddress(new Address("street1", "2", "RGB")));
+		repository.save(new Person("notfound", "notfound"));
+
+		Page<Person> result = repository.findByCustomQueryLastnameAndAddressStreetInList("bar",
+				Arrays.asList("street1", "street2"), new PageRequest(0, 2));
+
+		assertThat(result.getContent(), hasSize(2));
+		assertThat(result.getTotalPages(), is(2));
+		assertThat(result.getTotalElements(), is(3L));
+
+	}
+
+	/**
+	 * @see DATAMONGO-950
+	 */
+	@Test
+	public void shouldLimitCollectionQueryToMaxResultsWhenPresent() {
+
+		repository.save(Arrays.asList(new Person("Bob-1", "Dylan"), new Person("Bob-2", "Dylan"),
+				new Person("Bob-3", "Dylan"), new Person("Bob-4", "Dylan"), new Person("Bob-5", "Dylan")));
+		List<Person> result = repository.findTop3ByLastnameStartingWith("Dylan");
+		assertThat(result.size(), is(3));
+	}
+
+	/**
+	 * @see DATAMONGO-950
+	 */
+	@Test
+	public void shouldNotLimitPagedQueryWhenPageRequestWithinBounds() {
+
+		repository.save(Arrays.asList(new Person("Bob-1", "Dylan"), new Person("Bob-2", "Dylan"),
+				new Person("Bob-3", "Dylan"), new Person("Bob-4", "Dylan"), new Person("Bob-5", "Dylan")));
+		Page<Person> result = repository.findTop3ByLastnameStartingWith("Dylan", new PageRequest(0, 2));
+		assertThat(result.getContent().size(), is(2));
+	}
+
+	/**
+	 * @see DATAMONGO-950
+	 */
+	@Test
+	public void shouldLimitPagedQueryWhenPageRequestExceedsUpperBoundary() {
+
+		repository.save(Arrays.asList(new Person("Bob-1", "Dylan"), new Person("Bob-2", "Dylan"),
+				new Person("Bob-3", "Dylan"), new Person("Bob-4", "Dylan"), new Person("Bob-5", "Dylan")));
+		Page<Person> result = repository.findTop3ByLastnameStartingWith("Dylan", new PageRequest(1, 2));
+		assertThat(result.getContent().size(), is(1));
+	}
+
+	/**
+	 * @see DATAMONGO-950
+	 */
+	@Test
+	public void shouldReturnEmptyWhenPageRequestedPageIsTotallyOutOfScopeForLimit() {
+
+		repository.save(Arrays.asList(new Person("Bob-1", "Dylan"), new Person("Bob-2", "Dylan"),
+				new Person("Bob-3", "Dylan"), new Person("Bob-4", "Dylan"), new Person("Bob-5", "Dylan")));
+		Page<Person> result = repository.findTop3ByLastnameStartingWith("Dylan", new PageRequest(2, 2));
+		assertThat(result.getContent().size(), is(0));
+	}
+
+	/**
+	 * @see DATAMONGO-996, DATAMONGO-950
+	 */
+	@Test
+	public void gettingNonFirstPageWorksWithoutLimitBeingSet() {
+
+		Page<Person> slice = repository.findByLastnameLike("Matthews", new PageRequest(1, 1));
+
+		assertThat(slice.getContent(), hasSize(1));
+		assertThat(slice.hasPrevious(), is(true));
+		assertThat(slice.hasNext(), is(false));
+	}
+
+	/**
+	 * Ignored for now as this requires Querydsl 3.4.1 to succeed.
+	 * 
+	 * @see DATAMONGO-972
+	 */
+	@Test
+	@Ignore
+	public void shouldExecuteFindOnDbRefCorrectly() {
+
+		operations.remove(new org.springframework.data.mongodb.core.query.Query(), User.class);
+
+		User user = new User();
+		user.setUsername("Valerie Matthews");
+
+		operations.save(user);
+
+		dave.setCreator(user);
+		operations.save(dave);
+
+		assertThat(repository.findOne(QPerson.person.creator.eq(user)), is(dave));
+	}
+
+	/**
+	 * @see DATAMONGO-969
+	 */
+	@Test
+	public void shouldFindPersonsWhenUsingQueryDslPerdicatedOnIdProperty() {
+		assertThat(repository.findAll(person.id.in(Arrays.asList(dave.id, carter.id))), containsInAnyOrder(dave, carter));
+	}
+
+	/**
+	 * @see DATAMONGO-1030
+	 */
+	@Test
+	public void executesSingleEntityQueryWithProjectionCorrectly() {
+
+		PersonSummary result = repository.findSummaryByLastname("Beauford");
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.firstname, is("Carter"));
+		assertThat(result.lastname, is("Beauford"));
+	}
+
+	/**
+	 * @see DATAMONGO-1057
+	 */
+	@Test
+	public void sliceShouldTraverseElementsWithoutSkippingOnes() {
+
+		repository.deleteAll();
+
+		List<Person> persons = new ArrayList<Person>(100);
+		for (int i = 0; i < 100; i++) {
+			// format firstname to assert sorting retains proper order
+			persons.add(new Person(String.format("%03d", i), "ln" + 1, 100));
+		}
+
+		repository.save(persons);
+
+		Slice<Person> slice = repository.findByAgeGreaterThan(50, new PageRequest(0, 20, Direction.ASC, "firstname"));
+		assertThat(slice, contains(persons.subList(0, 20).toArray()));
+
+		slice = repository.findByAgeGreaterThan(50, slice.nextPageable());
+		assertThat(slice, contains(persons.subList(20, 40).toArray()));
+	}
+
+	/**
+	 * @see DATAMONGO-1072
+	 */
+	@Test
+	public void shouldBindPlaceholdersUsedAsKeysCorrectly() {
+
+		List<Person> persons = repository.findByKeyValue("firstname", alicia.getFirstname());
+
+		assertThat(persons, hasSize(1));
+		assertThat(persons, hasItem(alicia));
+	}
+
+	/**
+	 * @see DATAMONGO-1105
+	 */
+	@Test
+	public void returnsOrderedResultsForQuerydslOrderSpecifier() {
+
+		Iterable<Person> result = repository.findAll(person.firstname.asc());
+
+		assertThat(result, contains(alicia, boyd, carter, dave, leroi, oliver, stefan));
+	}
+
+	/**
+	 * @see DATAMONGO-1085
+	 */
+	@Test
+	public void shouldSupportSortingByQueryDslOrderSpecifier() {
+
+		repository.deleteAll();
+
+		List<Person> persons = new ArrayList<Person>();
+
+		for (int i = 0; i < 3; i++) {
+			Person person = new Person(String.format("Siggi %s", i), "Bar", 30);
+			person.setAddress(new Address(String.format("Street %s", i), "12345", "SinCity"));
+			persons.add(person);
+		}
+
+		repository.save(persons);
+
+		QPerson person = QPerson.person;
+
+		Iterable<Person> result = repository.findAll(person.firstname.isNotNull(), person.address.street.desc());
+
+		assertThat(result, is(Matchers.<Person> iterableWithSize(persons.size())));
+		assertThat(result.iterator().next().getFirstname(), is(persons.get(2).getFirstname()));
+	}
+
+	/**
+	 * @see DATAMONGO-1085
+	 */
+	@Test
+	public void shouldSupportSortingWithQSortByQueryDslOrderSpecifier() throws Exception {
+
+		repository.deleteAll();
+
+		List<Person> persons = new ArrayList<Person>();
+
+		for (int i = 0; i < 3; i++) {
+			Person person = new Person(String.format("Siggi %s", i), "Bar", 30);
+			person.setAddress(new Address(String.format("Street %s", i), "12345", "SinCity"));
+			persons.add(person);
+		}
+
+		repository.save(persons);
+
+		PageRequest pageRequest = new PageRequest(0, 2, new QSort(person.address.street.desc()));
+		Iterable<Person> result = repository.findAll(pageRequest);
+
+		assertThat(result, is(Matchers.<Person> iterableWithSize(2)));
+		assertThat(result.iterator().next().getFirstname(), is("Siggi 2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1085
+	 */
+	@Test
+	public void shouldSupportSortingWithQSort() throws Exception {
+
+		repository.deleteAll();
+
+		List<Person> persons = new ArrayList<Person>();
+
+		for (int i = 0; i < 3; i++) {
+			Person person = new Person(String.format("Siggi %s", i), "Bar", 30);
+			person.setAddress(new Address(String.format("Street %s", i), "12345", "SinCity"));
+			persons.add(person);
+		}
+
+		repository.save(persons);
+
+		Iterable<Person> result = repository.findAll(new QSort(person.address.street.desc()));
+
+		assertThat(result, is(Matchers.<Person> iterableWithSize(persons.size())));
+		assertThat(result.iterator().next().getFirstname(), is("Siggi 2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1165
+	 */
+	@Test
+	public void shouldAllowReturningJava8StreamInCustomQuery() throws Exception {
+
+		Stream<Person> result = repository.findByCustomQueryWithStreamingCursorByFirstnames(Arrays.asList("Dave"));
+
+		try {
+			assertThat(result.collect(Collectors.<Person> toList()), hasItems(dave));
+		} finally {
+			result.close();
+		}
+	}
+
+	/**
+	 * @see DATAMONGO-1110
+	 */
+	@Test
+	public void executesGeoNearQueryForResultsCorrectlyWhenGivenMinAndMaxDistance() {
+
+		Point point = new Point(-73.99171, 40.738868);
+		dave.setLocation(point);
+		repository.save(dave);
+
+		Range<Distance> range = Distance.between(new Distance(0.01, KILOMETERS), new Distance(2000, KILOMETERS));
+
+		GeoResults<Person> results = repository.findPersonByLocationNear(new Point(-73.99, 40.73), range);
+		assertThat(results.getContent().isEmpty(), is(false));
+	}
+
+	/**
+	 * @see DATAMONGO-990
+	 */
+	@Test
+	public void shouldFindByFirstnameForSpELExpressionWithParameterIndexOnly() {
+
+		List<Person> users = repository.findWithSpelByFirstnameForSpELExpressionWithParameterIndexOnly("Dave");
+
+		assertThat(users, hasSize(1));
+		assertThat(users.get(0), is(dave));
+	}
+
+	/**
+	 * @see DATAMONGO-990
+	 */
+	@Test
+	public void shouldFindByFirstnameAndCurrentUserWithCustomQuery() {
+
+		SampleSecurityContextHolder.getCurrent().setPrincipal(dave);
+		List<Person> users = repository.findWithSpelByFirstnameAndCurrentUserWithCustomQuery("Dave");
+
+		assertThat(users, hasSize(1));
+		assertThat(users.get(0), is(dave));
+	}
+
+	/**
+	 * @see DATAMONGO-990
+	 */
+	@Test
+	public void shouldFindByFirstnameForSpELExpressionWithParameterVariableOnly() {
+
+		List<Person> users = repository.findWithSpelByFirstnameForSpELExpressionWithParameterVariableOnly("Dave");
+
+		assertThat(users, hasSize(1));
+		assertThat(users.get(0), is(dave));
 	}
 }

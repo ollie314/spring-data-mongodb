@@ -1,5 +1,5 @@
 /*
- * Copyright 2012 the original author or authors.
+ * Copyright 2012-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,10 @@
  */
 package org.springframework.data.mongodb.repository.config;
 
+import java.lang.annotation.Annotation;
+import java.util.Collection;
+import java.util.Collections;
+
 import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionBuilder;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
@@ -22,7 +26,9 @@ import org.springframework.beans.factory.support.RootBeanDefinition;
 import org.springframework.core.annotation.AnnotationAttributes;
 import org.springframework.data.config.ParsingUtils;
 import org.springframework.data.mongodb.config.BeanNames;
+import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
+import org.springframework.data.mongodb.repository.MongoRepository;
 import org.springframework.data.mongodb.repository.support.MongoRepositoryFactoryBean;
 import org.springframework.data.repository.config.AnnotationRepositoryConfigurationSource;
 import org.springframework.data.repository.config.RepositoryConfigurationExtension;
@@ -45,6 +51,15 @@ public class MongoRepositoryConfigurationExtension extends RepositoryConfigurati
 
 	/* 
 	 * (non-Javadoc)
+	 * @see org.springframework.data.repository.config.RepositoryConfigurationExtensionSupport#getModuleName()
+	 */
+	@Override
+	public String getModuleName() {
+		return "MongoDB";
+	}
+
+	/* 
+	 * (non-Javadoc)
 	 * @see org.springframework.data.repository.config.RepositoryConfigurationExtensionSupport#getModulePrefix()
 	 */
 	@Override
@@ -58,6 +73,24 @@ public class MongoRepositoryConfigurationExtension extends RepositoryConfigurati
 	 */
 	public String getRepositoryFactoryClassName() {
 		return MongoRepositoryFactoryBean.class.getName();
+	}
+
+	/* 
+	 * (non-Javadoc)
+	 * @see org.springframework.data.repository.config.RepositoryConfigurationExtensionSupport#getIdentifyingAnnotations()
+	 */
+	@Override
+	protected Collection<Class<? extends Annotation>> getIdentifyingAnnotations() {
+		return Collections.<Class<? extends Annotation>> singleton(Document.class);
+	}
+
+	/* 
+	 * (non-Javadoc)
+	 * @see org.springframework.data.repository.config.RepositoryConfigurationExtensionSupport#getIdentifyingTypes()
+	 */
+	@Override
+	protected Collection<Class<?>> getIdentifyingTypes() {
+		return Collections.<Class<?>> singleton(MongoRepository.class);
 	}
 
 	/* 
@@ -104,6 +137,8 @@ public class MongoRepositoryConfigurationExtension extends RepositoryConfigurati
 	 */
 	@Override
 	public void registerBeansForRoot(BeanDefinitionRegistry registry, RepositoryConfigurationSource configurationSource) {
+
+		super.registerBeansForRoot(registry, configurationSource);
 
 		if (!registry.containsBeanDefinition(BeanNames.MAPPING_CONTEXT_BEAN_NAME)) {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 package org.springframework.data.mongodb.core.convert;
 
-import static org.hamcrest.Matchers.*;
+import static org.hamcrest.CoreMatchers.*;
 import static org.junit.Assert.*;
 import static org.mockito.Matchers.*;
 import static org.mockito.Mockito.*;
@@ -30,27 +30,40 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+import org.bson.types.ObjectId;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
+import org.springframework.data.annotation.AccessType;
+import org.springframework.data.annotation.AccessType.Type;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.PersistenceConstructor;
+import org.springframework.data.mapping.PersistentPropertyAccessor;
 import org.springframework.data.mapping.PropertyPath;
 import org.springframework.data.mongodb.MongoDbFactory;
 import org.springframework.data.mongodb.core.MongoExceptionTranslator;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverterUnitTests.Person;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
+import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
+import org.springframework.data.mongodb.util.MongoClientVersion;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.util.SerializationUtils;
 
 import com.mongodb.BasicDBObject;
+import com.mongodb.DB;
+import com.mongodb.DBCollection;
 import com.mongodb.DBObject;
 import com.mongodb.DBRef;
 
 /**
+ * Unit tests for {@link DbRefMappingMongoConverter}.
+ * 
  * @author Oliver Gierke
+ * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 @RunWith(MockitoJUnitRunner.class)
 public class DbRefMappingMongoConverterUnitTests {
@@ -59,14 +72,16 @@ public class DbRefMappingMongoConverterUnitTests {
 	MongoMappingContext mappingContext;
 
 	@Mock MongoDbFactory dbFactory;
+	DefaultDbRefResolver dbRefResolver;
 
 	@Before
 	public void setUp() {
 
 		when(dbFactory.getExceptionTranslator()).thenReturn(new MongoExceptionTranslator());
 
+		this.dbRefResolver = spy(new DefaultDbRefResolver(dbFactory));
 		this.mappingContext = new MongoMappingContext();
-		this.converter = new MappingMongoConverter(new DefaultDbRefResolver(dbFactory), mappingContext);
+		this.converter = new MappingMongoConverter(dbRefResolver, mappingContext);
 	}
 
 	/**
@@ -80,7 +95,7 @@ public class DbRefMappingMongoConverterUnitTests {
 
 		DBRef dbRef = converter.toDBRef(person, null);
 		assertThat(dbRef.getId(), is((Object) "foo"));
-		assertThat(dbRef.getRef(), is("person"));
+		assertThat(dbRef.getCollectionName(), is("person"));
 	}
 
 	/**
@@ -88,6 +103,21 @@ public class DbRefMappingMongoConverterUnitTests {
 	 */
 	@Test
 	public void convertDocumentWithMapDBRef() {
+
+		DBObject mapValDBObject = new BasicDBObject();
+		mapValDBObject.put("_id", BigInteger.ONE);
+
+		DBRef dbRef = mock(DBRef.class);
+
+		if (MongoClientVersion.isMongo3Driver()) {
+			DB dbMock = mock(DB.class);
+			DBCollection collectionMock = mock(DBCollection.class);
+			when(dbFactory.getDb()).thenReturn(dbMock);
+			when(dbMock.getCollection(anyString())).thenReturn(collectionMock);
+			when(collectionMock.findOne(anyObject())).thenReturn(mapValDBObject);
+		} else {
+			when(dbRefResolver.fetch(dbRef)).thenReturn(mapValDBObject);
+		}
 
 		MapDBRef mapDBRef = new MapDBRef();
 
@@ -105,12 +135,6 @@ public class DbRefMappingMongoConverterUnitTests {
 		DBObject map = (DBObject) dbObject.get("map");
 
 		assertThat(map.get("test"), instanceOf(DBRef.class));
-
-		DBObject mapValDBObject = new BasicDBObject();
-		mapValDBObject.put("_id", BigInteger.ONE);
-
-		DBRef dbRef = mock(DBRef.class);
-		when(dbRef.fetch()).thenReturn(mapValDBObject);
 
 		((DBObject) dbObject.get("map")).put("test", dbRef);
 
@@ -133,7 +157,7 @@ public class DbRefMappingMongoConverterUnitTests {
 
 		DBRef dbRef = converter.toDBRef(person, property);
 		assertThat(dbRef.getId(), is((Object) "foo"));
-		assertThat(dbRef.getRef(), is("person"));
+		assertThat(dbRef.getCollectionName(), is("person"));
 	}
 
 	/**
@@ -283,6 +307,276 @@ public class DbRefMappingMongoConverterUnitTests {
 		assertThat(deserializedResult.dbRefToSerializableTarget.getValue(), is(value));
 	}
 
+	/**
+	 * @see DATAMONGO-884
+	 */
+	@Test
+	public void lazyLoadingProxyForToStringObjectMethodOverridingDbref() {
+
+		String id = "42";
+		String value = "bubu";
+		MappingMongoConverter converterSpy = spy(converter);
+		doReturn(new BasicDBObject("_id", id).append("value", value)).when(converterSpy).readRef((DBRef) any());
+
+		BasicDBObject dbo = new BasicDBObject();
+		WithObjectMethodOverrideLazyDbRefs lazyDbRefs = new WithObjectMethodOverrideLazyDbRefs();
+		lazyDbRefs.dbRefToToStringObjectMethodOverride = new ToStringObjectMethodOverrideLazyDbRefTarget(id, value);
+		converterSpy.write(lazyDbRefs, dbo);
+
+		WithObjectMethodOverrideLazyDbRefs result = converterSpy.read(WithObjectMethodOverrideLazyDbRefs.class, dbo);
+
+		assertThat(result.dbRefToToStringObjectMethodOverride, is(notNullValue()));
+		assertProxyIsResolved(result.dbRefToToStringObjectMethodOverride, false);
+		assertThat(result.dbRefToToStringObjectMethodOverride.toString(), is(id + ":" + value));
+		assertProxyIsResolved(result.dbRefToToStringObjectMethodOverride, true);
+	}
+
+	/**
+	 * @see DATAMONGO-884
+	 */
+	@Test
+	public void callingToStringObjectMethodOnLazyLoadingDbrefShouldNotInitializeProxy() {
+
+		String id = "42";
+		String value = "bubu";
+		MappingMongoConverter converterSpy = spy(converter);
+		doReturn(new BasicDBObject("_id", id).append("value", value)).when(converterSpy).readRef((DBRef) any());
+
+		BasicDBObject dbo = new BasicDBObject();
+		WithObjectMethodOverrideLazyDbRefs lazyDbRefs = new WithObjectMethodOverrideLazyDbRefs();
+		lazyDbRefs.dbRefToPlainObject = new LazyDbRefTarget(id, value);
+		converterSpy.write(lazyDbRefs, dbo);
+
+		WithObjectMethodOverrideLazyDbRefs result = converterSpy.read(WithObjectMethodOverrideLazyDbRefs.class, dbo);
+
+		assertThat(result.dbRefToPlainObject, is(notNullValue()));
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+
+		// calling Object#toString does not initialize the proxy.
+		String proxyString = result.dbRefToPlainObject.toString();
+		assertThat(proxyString, is("lazyDbRefTarget" + ":" + id + "$LazyLoadingProxy"));
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+
+		// calling another method not declared on object triggers proxy initialization.
+		assertThat(result.dbRefToPlainObject.getValue(), is(value));
+		assertProxyIsResolved(result.dbRefToPlainObject, true);
+	}
+
+	/**
+	 * @see DATAMONGO-884
+	 */
+	@Test
+	public void equalsObjectMethodOnLazyLoadingDbrefShouldNotInitializeProxy() {
+
+		String id = "42";
+		String value = "bubu";
+		MappingMongoConverter converterSpy = spy(converter);
+		doReturn(new BasicDBObject("_id", id).append("value", value)).when(converterSpy).readRef((DBRef) any());
+
+		BasicDBObject dbo = new BasicDBObject();
+		WithObjectMethodOverrideLazyDbRefs lazyDbRefs = new WithObjectMethodOverrideLazyDbRefs();
+		lazyDbRefs.dbRefToPlainObject = new LazyDbRefTarget(id, value);
+		lazyDbRefs.dbRefToToStringObjectMethodOverride = new ToStringObjectMethodOverrideLazyDbRefTarget(id, value);
+		converterSpy.write(lazyDbRefs, dbo);
+
+		WithObjectMethodOverrideLazyDbRefs result = converterSpy.read(WithObjectMethodOverrideLazyDbRefs.class, dbo);
+
+		assertThat(result.dbRefToPlainObject, is(notNullValue()));
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+
+		assertThat(result.dbRefToPlainObject, is(equalTo(result.dbRefToPlainObject)));
+		assertThat(result.dbRefToPlainObject, is(not(equalTo(null))));
+		assertThat(result.dbRefToPlainObject, is(not(equalTo((Object) lazyDbRefs.dbRefToToStringObjectMethodOverride))));
+
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+	}
+
+	/**
+	 * @see DATAMONGO-884
+	 */
+	@Test
+	public void hashcodeObjectMethodOnLazyLoadingDbrefShouldNotInitializeProxy() {
+
+		String id = "42";
+		String value = "bubu";
+		MappingMongoConverter converterSpy = spy(converter);
+		doReturn(new BasicDBObject("_id", id).append("value", value)).when(converterSpy).readRef((DBRef) any());
+
+		BasicDBObject dbo = new BasicDBObject();
+		WithObjectMethodOverrideLazyDbRefs lazyDbRefs = new WithObjectMethodOverrideLazyDbRefs();
+		lazyDbRefs.dbRefToPlainObject = new LazyDbRefTarget(id, value);
+		lazyDbRefs.dbRefToToStringObjectMethodOverride = new ToStringObjectMethodOverrideLazyDbRefTarget(id, value);
+		converterSpy.write(lazyDbRefs, dbo);
+
+		WithObjectMethodOverrideLazyDbRefs result = converterSpy.read(WithObjectMethodOverrideLazyDbRefs.class, dbo);
+
+		assertThat(result.dbRefToPlainObject, is(notNullValue()));
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+
+		assertThat(result.dbRefToPlainObject.hashCode(), is(311365444));
+
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+	}
+
+	/**
+	 * @see DATAMONGO-884
+	 */
+	@Test
+	public void lazyLoadingProxyForEqualsAndHashcodeObjectMethodOverridingDbref() {
+
+		String id = "42";
+		String value = "bubu";
+		MappingMongoConverter converterSpy = spy(converter);
+		doReturn(new BasicDBObject("_id", id).append("value", value)).when(converterSpy).readRef((DBRef) any());
+
+		BasicDBObject dbo = new BasicDBObject();
+		WithObjectMethodOverrideLazyDbRefs lazyDbRefs = new WithObjectMethodOverrideLazyDbRefs();
+		lazyDbRefs.dbRefEqualsAndHashcodeObjectMethodOverride1 = new EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget(
+				id, value);
+		lazyDbRefs.dbRefEqualsAndHashcodeObjectMethodOverride2 = new EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget(
+				id, value);
+		converterSpy.write(lazyDbRefs, dbo);
+
+		WithObjectMethodOverrideLazyDbRefs result = converterSpy.read(WithObjectMethodOverrideLazyDbRefs.class, dbo);
+
+		assertProxyIsResolved(result.dbRefEqualsAndHashcodeObjectMethodOverride1, false);
+		assertThat(result.dbRefEqualsAndHashcodeObjectMethodOverride1, is(notNullValue()));
+		result.dbRefEqualsAndHashcodeObjectMethodOverride1.equals(null);
+		assertProxyIsResolved(result.dbRefEqualsAndHashcodeObjectMethodOverride1, true);
+
+		assertProxyIsResolved(result.dbRefEqualsAndHashcodeObjectMethodOverride2, false);
+		assertThat(result.dbRefEqualsAndHashcodeObjectMethodOverride2, is(notNullValue()));
+		result.dbRefEqualsAndHashcodeObjectMethodOverride2.hashCode();
+		assertProxyIsResolved(result.dbRefEqualsAndHashcodeObjectMethodOverride2, true);
+	}
+
+	/**
+	 * @see DATAMONGO-987
+	 */
+	@Test
+	public void shouldNotGenerateLazyLoadingProxyForNullValues() {
+
+		DBObject dbo = new BasicDBObject();
+		ClassWithLazyDbRefs lazyDbRefs = new ClassWithLazyDbRefs();
+		lazyDbRefs.id = "42";
+		converter.write(lazyDbRefs, dbo);
+
+		ClassWithLazyDbRefs result = converter.read(ClassWithLazyDbRefs.class, dbo);
+
+		assertThat(result.id, is(lazyDbRefs.id));
+		assertThat(result.dbRefToInterface, is(nullValue()));
+		assertThat(result.dbRefToConcreteCollection, is(nullValue()));
+		assertThat(result.dbRefToConcreteType, is(nullValue()));
+		assertThat(result.dbRefToConcreteTypeWithPersistenceConstructor, is(nullValue()));
+		assertThat(result.dbRefToConcreteTypeWithPersistenceConstructorWithoutDefaultConstructor, is(nullValue()));
+	}
+
+	/**
+	 * @see DATAMONGO-1005
+	 */
+	@Test
+	public void shouldBeAbleToStoreDirectReferencesToSelf() {
+
+		DBObject dbo = new BasicDBObject();
+
+		ClassWithDbRefField o = new ClassWithDbRefField();
+		o.id = "123";
+		o.reference = o;
+		converter.write(o, dbo);
+
+		ClassWithDbRefField found = converter.read(ClassWithDbRefField.class, dbo);
+
+		assertThat(found, is(notNullValue()));
+		assertThat(found.reference, is(found));
+	}
+
+	/**
+	 * @see DATAMONGO-1005
+	 */
+	@Test
+	public void shouldBeAbleToStoreNestedReferencesToSelf() {
+
+		DBObject dbo = new BasicDBObject();
+
+		ClassWithNestedDbRefField o = new ClassWithNestedDbRefField();
+		o.id = "123";
+		o.nested = new NestedReferenceHolder();
+		o.nested.reference = o;
+
+		converter.write(o, dbo);
+
+		ClassWithNestedDbRefField found = converter.read(ClassWithNestedDbRefField.class, dbo);
+
+		assertThat(found, is(notNullValue()));
+		assertThat(found.nested, is(notNullValue()));
+		assertThat(found.nested.reference, is(found));
+	}
+
+	/**
+	 * @see DATAMONGO-1012
+	 */
+	@Test
+	public void shouldEagerlyResolveIdPropertyWithFieldAccess() {
+
+		MongoPersistentEntity<?> entity = mappingContext.getPersistentEntity(ClassWithLazyDbRefs.class);
+		MongoPersistentProperty property = entity.getPersistentProperty("dbRefToConcreteType");
+		MongoPersistentEntity<?> propertyEntity = mappingContext.getPersistentEntity(property);
+
+		String idValue = new ObjectId().toString();
+		DBRef dbRef = converter.toDBRef(new LazyDbRefTarget(idValue), property);
+
+		DBObject object = new BasicDBObject("dbRefToConcreteType", dbRef);
+
+		ClassWithLazyDbRefs result = converter.read(ClassWithLazyDbRefs.class, object);
+
+		PersistentPropertyAccessor accessor = propertyEntity.getPropertyAccessor(result.dbRefToConcreteType);
+		MongoPersistentProperty idProperty = mappingContext.getPersistentEntity(LazyDbRefTarget.class).getIdProperty();
+
+		assertThat(accessor.getProperty(idProperty), is(notNullValue()));
+		assertProxyIsResolved(result.dbRefToConcreteType, false);
+	}
+
+	/**
+	 * @see DATAMONGO-1012
+	 */
+	@Test
+	public void shouldNotEagerlyResolveIdPropertyWithPropertyAccess() {
+
+		MongoPersistentEntity<?> entity = mappingContext.getPersistentEntity(ClassWithLazyDbRefs.class);
+		MongoPersistentProperty property = entity.getPersistentProperty("dbRefToConcreteTypeWithPropertyAccess");
+
+		String idValue = new ObjectId().toString();
+		DBRef dbRef = converter.toDBRef(new LazyDbRefTargetPropertyAccess(idValue), property);
+
+		DBObject object = new BasicDBObject("dbRefToConcreteTypeWithPropertyAccess", dbRef);
+
+		ClassWithLazyDbRefs result = converter.read(ClassWithLazyDbRefs.class, object);
+
+		LazyDbRefTargetPropertyAccess proxy = result.dbRefToConcreteTypeWithPropertyAccess;
+		assertThat(ReflectionTestUtils.getField(proxy, "id"), is(nullValue()));
+		assertProxyIsResolved(proxy, false);
+	}
+
+	/**
+	 * @see DATAMONGO-1076
+	 */
+	@Test
+	public void shouldNotTriggerResolvingOfLazyLoadedProxyWhenFinalizeMethodIsInvoked() throws Exception {
+
+		MongoPersistentEntity<?> entity = mappingContext.getPersistentEntity(WithObjectMethodOverrideLazyDbRefs.class);
+		MongoPersistentProperty property = entity.getPersistentProperty("dbRefToConcreteTypeWithPropertyAccess");
+
+		String idValue = new ObjectId().toString();
+		DBRef dbRef = converter.toDBRef(new LazyDbRefTargetPropertyAccess(idValue), property);
+
+		WithObjectMethodOverrideLazyDbRefs result = converter.read(WithObjectMethodOverrideLazyDbRefs.class,
+				new BasicDBObject("dbRefToPlainObject", dbRef));
+
+		ReflectionTestUtils.invokeMethod(result.dbRefToPlainObject, "finalize");
+
+		assertProxyIsResolved(result.dbRefToPlainObject, false);
+	}
+
 	private Object transport(Object result) {
 		return SerializationUtils.deserialize(SerializationUtils.serialize(result));
 	}
@@ -305,6 +599,7 @@ public class DbRefMappingMongoConverterUnitTests {
 		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) List<LazyDbRefTarget> dbRefToInterface;
 		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) ArrayList<LazyDbRefTarget> dbRefToConcreteCollection;
 		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) LazyDbRefTarget dbRefToConcreteType;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) LazyDbRefTargetPropertyAccess dbRefToConcreteTypeWithPropertyAccess;
 		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) LazyDbRefTargetWithPeristenceConstructor dbRefToConcreteTypeWithPersistenceConstructor;
 		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) LazyDbRefTargetWithPeristenceConstructorWithoutDefaultConstructor dbRefToConcreteTypeWithPersistenceConstructorWithoutDefaultConstructor;
 	}
@@ -345,6 +640,22 @@ public class DbRefMappingMongoConverterUnitTests {
 		}
 	}
 
+	static class LazyDbRefTargetPropertyAccess implements Serializable {
+
+		private static final long serialVersionUID = 1L;
+
+		@Id @AccessType(Type.PROPERTY) String id;
+
+		public LazyDbRefTargetPropertyAccess(String id) {
+			this.id = id;
+		}
+
+		public String getId() {
+			return id;
+		}
+	}
+
+	@SuppressWarnings("serial")
 	static class LazyDbRefTargetWithPeristenceConstructor extends LazyDbRefTarget {
 
 		boolean persistenceConstructorCalled;
@@ -362,6 +673,7 @@ public class DbRefMappingMongoConverterUnitTests {
 		}
 	}
 
+	@SuppressWarnings("serial")
 	static class LazyDbRefTargetWithPeristenceConstructorWithoutDefaultConstructor extends LazyDbRefTarget {
 
 		boolean persistenceConstructorCalled;
@@ -386,5 +698,93 @@ public class DbRefMappingMongoConverterUnitTests {
 		}
 
 		private static final long serialVersionUID = 1L;
+	}
+
+	static class ToStringObjectMethodOverrideLazyDbRefTarget extends LazyDbRefTarget {
+
+		private static final long serialVersionUID = 1L;
+
+		public ToStringObjectMethodOverrideLazyDbRefTarget() {}
+
+		public ToStringObjectMethodOverrideLazyDbRefTarget(String id, String value) {
+			super(id, value);
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see java.lang.Object#toString()
+		 */
+		@Override
+		public String toString() {
+			return this.id + ":" + this.value;
+		}
+	}
+
+	static class EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget extends LazyDbRefTarget {
+
+		private static final long serialVersionUID = 1L;
+
+		public EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget() {}
+
+		public EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget(String id, String value) {
+			super(id, value);
+		}
+
+		@Override
+		public int hashCode() {
+			final int prime = 31;
+			int result = 1;
+			result = prime * result + ((id == null) ? 0 : id.hashCode());
+			result = prime * result + ((value == null) ? 0 : value.hashCode());
+			return result;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj)
+				return true;
+			if (obj == null)
+				return false;
+			if (getClass() != obj.getClass())
+				return false;
+			EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget other = (EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget) obj;
+			if (id == null) {
+				if (other.id != null)
+					return false;
+			} else if (!id.equals(other.id))
+				return false;
+			if (value == null) {
+				if (other.value != null)
+					return false;
+			} else if (!value.equals(other.value))
+				return false;
+			return true;
+		}
+	}
+
+	static class WithObjectMethodOverrideLazyDbRefs {
+
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) LazyDbRefTarget dbRefToPlainObject;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) ToStringObjectMethodOverrideLazyDbRefTarget dbRefToToStringObjectMethodOverride;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget dbRefEqualsAndHashcodeObjectMethodOverride2;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) EqualsAndHashCodeObjectMethodOverrideLazyDbRefTarget dbRefEqualsAndHashcodeObjectMethodOverride1;
+	}
+
+	class ClassWithDbRefField {
+
+		String id;
+		@org.springframework.data.mongodb.core.mapping.DBRef ClassWithDbRefField reference;
+	}
+
+	static class NestedReferenceHolder {
+
+		String id;
+		@org.springframework.data.mongodb.core.mapping.DBRef ClassWithNestedDbRefField reference;
+	}
+
+	static class ClassWithNestedDbRefField {
+
+		String id;
+		NestedReferenceHolder nested;
 	}
 }

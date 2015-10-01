@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013 the original author or authors.
+ * Copyright 2012-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import org.springframework.context.support.ClassPathXmlApplicationContext;
 import org.springframework.data.annotation.CreatedDate;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.mongodb.core.mapping.event.BeforeConvertEvent;
 
 /**
@@ -34,13 +35,19 @@ import org.springframework.data.mongodb.core.mapping.event.BeforeConvertEvent;
  */
 public class AuditingIntegrationTests {
 
+	/**
+	 * @see DATAMONGO-577, DATAMONGO-800, DATAMONGO-883
+	 */
 	@Test
 	public void enablesAuditingAndSetsPropertiesAccordingly() throws Exception {
 
 		AbstractApplicationContext context = new ClassPathXmlApplicationContext("auditing.xml", getClass());
 
+		MongoMappingContext mappingContext = context.getBean(MongoMappingContext.class);
+		mappingContext.getPersistentEntity(Entity.class);
+
 		Entity entity = new Entity();
-		BeforeConvertEvent<Entity> event = new BeforeConvertEvent<Entity>(entity);
+		BeforeConvertEvent<Entity> event = new BeforeConvertEvent<Entity>(entity, "collection-1");
 		context.publishEvent(event);
 
 		assertThat(entity.created, is(notNullValue()));
@@ -48,7 +55,7 @@ public class AuditingIntegrationTests {
 
 		Thread.sleep(10);
 		entity.id = 1L;
-		event = new BeforeConvertEvent<Entity>(entity);
+		event = new BeforeConvertEvent<Entity>(entity, "collection-1");
 		context.publishEvent(event);
 
 		assertThat(entity.created, is(notNullValue()));
@@ -58,8 +65,13 @@ public class AuditingIntegrationTests {
 
 	class Entity {
 
-		@CreatedDate DateTime created;
-		@LastModifiedDate DateTime modified;
 		@Id Long id;
+		@CreatedDate DateTime created;
+		DateTime modified;
+
+		@LastModifiedDate
+		public DateTime getModified() {
+			return modified;
+		}
 	}
 }

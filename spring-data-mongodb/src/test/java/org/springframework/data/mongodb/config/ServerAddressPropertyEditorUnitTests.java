@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013 the original author or authors.
+ * Copyright 2012-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collection;
 
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -49,11 +50,17 @@ public class ServerAddressPropertyEditorUnitTests {
 
 	/**
 	 * @see DATAMONGO-454
+	 * @see DATAMONGO-1062
 	 */
 	@Test(expected = IllegalArgumentException.class)
-	public void rejectsAddressConfigWithoutASingleParsableServerAddress() {
+	public void rejectsAddressConfigWithoutASingleParsableAndResolvableServerAddress() {
 
-		editor.setAsText("foo, bar");
+		String unknownHost1 = "gugu.nonexistant.example.org";
+		String unknownHost2 = "gaga.nonexistant.example.org";
+
+		assertUnresolveableHostnames(unknownHost1, unknownHost2);
+
+		editor.setAsText(unknownHost1 + "," + unknownHost2);
 	}
 
 	/**
@@ -191,6 +198,18 @@ public class ServerAddressPropertyEditorUnitTests {
 			assertThat(addresses, hasItem(new ServerAddress(InetAddress.getByName(hostAddress))));
 		} else {
 			assertThat(addresses, hasItem(new ServerAddress(InetAddress.getByName(hostAddress), port)));
+		}
+	}
+
+	private void assertUnresolveableHostnames(String... hostnames) {
+
+		for (String hostname : hostnames) {
+			try {
+				InetAddress.getByName(hostname);
+				Assert.fail("Supposedly unresolveable hostname '" + hostname + "' can be resolved.");
+			} catch (UnknownHostException expected) {
+				// ok
+			}
 		}
 	}
 }

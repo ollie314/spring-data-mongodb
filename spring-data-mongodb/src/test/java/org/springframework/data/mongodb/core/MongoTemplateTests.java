@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@ package org.springframework.data.mongodb.core;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 import static org.junit.Assume.*;
-import static org.mockito.Mockito.*;
+import static org.springframework.data.mongodb.core.ReflectiveWriteConcernInvoker.*;
+import static org.springframework.data.mongodb.core.ReflectiveWriteResultInvoker.*;
 import static org.springframework.data.mongodb.core.query.Criteria.*;
 import static org.springframework.data.mongodb.core.query.Query.*;
 import static org.springframework.data.mongodb.core.query.Update.*;
@@ -34,7 +35,6 @@ import java.util.List;
 import java.util.Map;
 
 import org.bson.types.ObjectId;
-import org.hamcrest.CoreMatchers;
 import org.joda.time.DateTime;
 import org.junit.After;
 import org.junit.Before;
@@ -61,6 +61,7 @@ import org.springframework.data.mongodb.MongoDbFactory;
 import org.springframework.data.mongodb.core.convert.CustomConversions;
 import org.springframework.data.mongodb.core.convert.DbRefResolver;
 import org.springframework.data.mongodb.core.convert.DefaultDbRefResolver;
+import org.springframework.data.mongodb.core.convert.LazyLoadingProxy;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
 import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.index.Index.Duplicates;
@@ -72,8 +73,10 @@ import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.util.CloseableIterator;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.util.ObjectUtils;
 import org.springframework.util.StringUtils;
 
 import com.mongodb.BasicDBObject;
@@ -105,6 +108,8 @@ public class MongoTemplateTests {
 
 	private static final org.springframework.data.util.Version TWO_DOT_FOUR = org.springframework.data.util.Version
 			.parse("2.4");
+	private static final org.springframework.data.util.Version TWO_DOT_EIGHT = org.springframework.data.util.Version
+			.parse("2.8");
 
 	@Autowired MongoTemplate template;
 	@Autowired MongoDbFactory factory;
@@ -115,7 +120,6 @@ public class MongoTemplateTests {
 	@Rule public ExpectedException thrown = ExpectedException.none();
 
 	@Autowired
-	@SuppressWarnings("unchecked")
 	public void setMongo(Mongo mongo) throws Exception {
 
 		CustomConversions conversions = new CustomConversions(Arrays.asList(DateToDateTimeConverter.INSTANCE,
@@ -185,7 +189,14 @@ public class MongoTemplateTests {
 		template.dropCollection(DocumentWithCollection.class);
 		template.dropCollection(DocumentWithCollectionOfSimpleType.class);
 		template.dropCollection(DocumentWithMultipleCollections.class);
+		template.dropCollection(DocumentWithNestedCollection.class);
+		template.dropCollection(DocumentWithEmbeddedDocumentWithCollection.class);
+		template.dropCollection(DocumentWithNestedList.class);
 		template.dropCollection(DocumentWithDBRefCollection.class);
+		template.dropCollection(SomeContent.class);
+		template.dropCollection(SomeTemplate.class);
+		template.dropCollection(Address.class);
+		template.dropCollection(DocumentWithCollectionOfSamples.class);
 	}
 
 	@Test
@@ -233,7 +244,7 @@ public class MongoTemplateTests {
 			template.insert(person);
 			fail("Expected DataIntegrityViolationException!");
 		} catch (DataIntegrityViolationException e) {
-			assertThat(e.getMessage(), containsString("E11000 duplicate key error index: database.person.$_id_  dup key:"));
+			assertThat(e.getMessage(), containsString("E11000 duplicate key error"));
 		}
 	}
 
@@ -254,10 +265,8 @@ public class MongoTemplateTests {
 		template.insert(person);
 
 		thrown.expect(DataIntegrityViolationException.class);
-		thrown.expectMessage("Execution");
-		thrown.expectMessage("UPDATE");
 		thrown.expectMessage("array");
-		thrown.expectMessage("firstName");
+		thrown.expectMessage("age");
 		thrown.expectMessage("failed");
 
 		Query query = new Query(Criteria.where("firstName").is("Amol"));
@@ -287,8 +296,7 @@ public class MongoTemplateTests {
 			template.save(person);
 			fail("Expected DataIntegrityViolationException!");
 		} catch (DataIntegrityViolationException e) {
-			assertThat(e.getMessage(),
-					containsString("E11000 duplicate key error index: database.person.$firstName_-1  dup key:"));
+			assertThat(e.getMessage(), containsString("E11000 duplicate key error"));
 		}
 	}
 
@@ -297,6 +305,9 @@ public class MongoTemplateTests {
 	 */
 	@Test
 	public void rejectsDuplicateIdInInsertAll() {
+
+		thrown.expect(DataIntegrityViolationException.class);
+		thrown.expectMessage("E11000 duplicate key error");
 
 		MongoTemplate template = new MongoTemplate(factory);
 		template.setWriteResultChecking(WriteResultChecking.EXCEPTION);
@@ -309,18 +320,11 @@ public class MongoTemplateTests {
 		records.add(person);
 		records.add(person);
 
-		try {
-			template.insertAll(records);
-			fail("Expected DataIntegrityViolationException!");
-		} catch (DataIntegrityViolationException e) {
-			assertThat(
-					e.getMessage(),
-					CoreMatchers
-							.startsWith("Insert list failed: E11000 duplicate key error index: database.person.$_id_  dup key: { : ObjectId"));
-		}
+		template.insertAll(records);
 	}
 
 	@Test
+	@SuppressWarnings("deprecation")
 	public void testEnsureIndex() throws Exception {
 
 		Person p1 = new Person("Oliver");
@@ -342,19 +346,29 @@ public class MongoTemplateTests {
 			if ("age_-1".equals(ix.get("name"))) {
 				indexKey = ix.get("key").toString();
 				unique = (Boolean) ix.get("unique");
-				dropDupes = (Boolean) ix.get("dropDups");
+				if (mongoVersion.isLessThan(TWO_DOT_EIGHT)) {
+					dropDupes = (Boolean) ix.get("dropDups");
+					assertThat(dropDupes, is(true));
+				} else {
+					assertThat(ix.get("dropDups"), is(nullValue()));
+				}
 			}
 		}
 		assertThat(indexKey, is("{ \"age\" : -1}"));
 		assertThat(unique, is(true));
-		assertThat(dropDupes, is(true));
 
 		List<IndexInfo> indexInfoList = template.indexOps(Person.class).getIndexInfo();
 
 		assertThat(indexInfoList.size(), is(2));
 		IndexInfo ii = indexInfoList.get(1);
 		assertThat(ii.isUnique(), is(true));
-		assertThat(ii.isDropDuplicates(), is(true));
+
+		if (mongoVersion.isLessThan(TWO_DOT_EIGHT)) {
+			assertThat(ii.isDropDuplicates(), is(true));
+		} else {
+			assertThat(ii.isDropDuplicates(), is(false));
+		}
+
 		assertThat(ii.isSparse(), is(false));
 
 		List<IndexField> indexFields = ii.getIndexFields();
@@ -370,7 +384,7 @@ public class MongoTemplateTests {
 	public void testReadIndexInfoForIndicesCreatedViaMongoShellCommands() throws Exception {
 
 		String command = "db." + template.getCollectionName(Person.class)
-				+ ".ensureIndex({'age':-1}, {'unique':true, 'sparse':true})";
+				+ ".createIndex({'age':-1}, {'unique':true, 'sparse':true})";
 		template.indexOps(Person.class).dropAllIndexes();
 
 		assertThat(template.indexOps(Person.class).getIndexInfo().isEmpty(), is(true));
@@ -680,8 +694,8 @@ public class MongoTemplateTests {
 		Query q = new Query(Criteria.where("text").regex("^Hello.*"));
 		Message found1 = template.findAndRemove(q, Message.class);
 		Message found2 = template.findAndRemove(q, Message.class);
-		// Message notFound = template.findAndRemove(q, Message.class);
-		DBObject notFound = template.getCollection("").findAndRemove(q.getQueryObject());
+
+		Message notFound = template.findAndRemove(q, Message.class);
 		assertThat(found1, notNullValue());
 		assertThat(found2, notNullValue());
 		assertThat(notFound, nullValue());
@@ -987,7 +1001,9 @@ public class MongoTemplateTests {
 
 		WriteResult wr = template.updateMulti(new Query(), u, PersonWithIdPropertyOfTypeObjectId.class);
 
-		assertThat(wr.getN(), is(2));
+		if (wasAcknowledged(wr)) {
+			assertThat(wr.getN(), is(2));
+		}
 
 		Query q1 = new Query(Criteria.where("age").in(11, 21));
 		List<PersonWithIdPropertyOfTypeObjectId> r1 = template.find(q1, PersonWithIdPropertyOfTypeObjectId.class);
@@ -1089,7 +1105,6 @@ public class MongoTemplateTests {
 	}
 
 	@Test
-	@SuppressWarnings("deprecation")
 	public void testUsingReadPreference() throws Exception {
 		this.template.execute("readPref", new CollectionCallback<Object>() {
 			public Object doInCollection(DBCollection collection) throws MongoException, DataAccessException {
@@ -1099,10 +1114,10 @@ public class MongoTemplateTests {
 			}
 		});
 		MongoTemplate slaveTemplate = new MongoTemplate(factory);
-		slaveTemplate.setReadPreference(ReadPreference.SECONDARY);
+		slaveTemplate.setReadPreference(ReadPreference.secondary());
 		slaveTemplate.execute("readPref", new CollectionCallback<Object>() {
 			public Object doInCollection(DBCollection collection) throws MongoException, DataAccessException {
-				assertThat(collection.getReadPreference(), is(ReadPreference.SECONDARY));
+				assertThat(collection.getReadPreference(), is(ReadPreference.secondary()));
 				assertThat(collection.getDB().getOptions(), is(0));
 				return null;
 			}
@@ -1145,29 +1160,24 @@ public class MongoTemplateTests {
 		person.setId(new ObjectId());
 		person.setFirstName("Dave");
 
-		template.setWriteConcern(WriteConcern.NONE);
+		template.setWriteConcern(noneOrUnacknowledged());
 		template.save(person);
 		WriteResult result = template.updateFirst(query(where("id").is(person.getId())), update("firstName", "Carter"),
 				PersonWithIdPropertyOfTypeObjectId.class);
-		WriteConcern lastWriteConcern = result.getLastConcern();
-		assertThat(lastWriteConcern, equalTo(WriteConcern.NONE));
 
 		FsyncSafeWriteConcernResolver resolver = new FsyncSafeWriteConcernResolver();
 		template.setWriteConcernResolver(resolver);
 		Query q = query(where("_id").is(person.getId()));
 		Update u = update("firstName", "Carter");
 		result = template.updateFirst(q, u, PersonWithIdPropertyOfTypeObjectId.class);
-		lastWriteConcern = result.getLastConcern();
-		assertThat(lastWriteConcern, equalTo(WriteConcern.FSYNC_SAFE));
 
 		MongoAction lastMongoAction = resolver.getMongoAction();
 		assertThat(lastMongoAction.getCollectionName(), is("personWithIdPropertyOfTypeObjectId"));
-		assertThat(lastMongoAction.getDefaultWriteConcern(), equalTo(WriteConcern.NONE));
+		assertThat(lastMongoAction.getDefaultWriteConcern(), equalTo(noneOrUnacknowledged()));
 		assertThat(lastMongoAction.getDocument(), notNullValue());
 		assertThat(lastMongoAction.getEntityType().toString(), is(PersonWithIdPropertyOfTypeObjectId.class.toString()));
 		assertThat(lastMongoAction.getMongoActionOperation(), is(MongoActionOperation.UPDATE));
 		assertThat(lastMongoAction.getQuery(), equalTo(q.getQueryObject()));
-
 	}
 
 	private class FsyncSafeWriteConcernResolver implements WriteConcernResolver {
@@ -1190,8 +1200,8 @@ public class MongoTemplateTests {
 	@Test
 	public void updatesDBRefsCorrectly() {
 
-		DBRef first = new DBRef(factory.getDb(), "foo", new ObjectId());
-		DBRef second = new DBRef(factory.getDb(), "bar", new ObjectId());
+		DBRef first = new DBRef("foo", new ObjectId());
+		DBRef second = new DBRef("bar", new ObjectId());
 
 		template.updateFirst(null, update("dbRefs", Arrays.asList(first, second)), ClassWithDBRefs.class);
 	}
@@ -1708,29 +1718,6 @@ public class MongoTemplateTests {
 	}
 
 	/**
-	 * @see DATAMONGO-651
-	 */
-	@Test
-	public void throwsMongoSpecificExceptionForDataIntegrityViolations() {
-
-		WriteResult result = mock(WriteResult.class);
-		when(result.getError()).thenReturn("ERROR");
-
-		MongoActionOperation operation = MongoActionOperation.INSERT;
-
-		MongoTemplate mongoTemplate = new MongoTemplate(factory);
-		mongoTemplate.setWriteResultChecking(WriteResultChecking.EXCEPTION);
-
-		try {
-			mongoTemplate.handleAnyWriteResultErrors(result, null, operation);
-			fail("Expected MonogoDataIntegrityViolationException!");
-		} catch (MongoDataIntegrityViolationException o_O) {
-			assertThat(o_O.getActionOperation(), is(operation));
-			assertThat(o_O.getWriteResult(), is(result));
-		}
-	}
-
-	/**
 	 * @see DATAMONGO-679
 	 */
 	@Test
@@ -2225,6 +2212,243 @@ public class MongoTemplateTests {
 	}
 
 	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldRetainTypeInformationWithinUpdatedTypeOnDocumentWithNestedCollectionWhenWholeCollectionIsReplaced() {
+
+		DocumentWithNestedCollection doc = new DocumentWithNestedCollection();
+
+		Map<String, Model> entry = new HashMap<String, Model>();
+		entry.put("key1", new ModelA("value1"));
+		doc.models.add(entry);
+
+		template.save(doc);
+
+		entry.put("key2", new ModelA("value2"));
+
+		Query query = query(where("id").is(doc.id));
+		Update update = Update.update("models", Collections.singletonList(entry));
+
+		assertThat(template.findOne(query, DocumentWithNestedCollection.class), notNullValue());
+
+		template.findAndModify(query, update, DocumentWithNestedCollection.class);
+
+		DocumentWithNestedCollection retrieved = template.findOne(query, DocumentWithNestedCollection.class);
+
+		assertThat(retrieved, is(notNullValue()));
+		assertThat(retrieved.id, is(doc.id));
+
+		assertThat(retrieved.models.get(0).entrySet(), hasSize(2));
+
+		assertThat(retrieved.models.get(0).get("key1"), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get("key1").value(), equalTo("value1"));
+
+		assertThat(retrieved.models.get(0).get("key2"), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get("key2").value(), equalTo("value2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldRetainTypeInformationWithinUpdatedTypeOnDocumentWithNestedCollectionWhenFirstElementIsReplaced() {
+
+		DocumentWithNestedCollection doc = new DocumentWithNestedCollection();
+
+		Map<String, Model> entry = new HashMap<String, Model>();
+		entry.put("key1", new ModelA("value1"));
+		doc.models.add(entry);
+
+		template.save(doc);
+
+		entry.put("key2", new ModelA("value2"));
+
+		Query query = query(where("id").is(doc.id));
+		Update update = Update.update("models.0", entry);
+
+		assertThat(template.findOne(query, DocumentWithNestedCollection.class), notNullValue());
+
+		template.findAndModify(query, update, DocumentWithNestedCollection.class);
+
+		DocumentWithNestedCollection retrieved = template.findOne(query, DocumentWithNestedCollection.class);
+
+		assertThat(retrieved, is(notNullValue()));
+		assertThat(retrieved.id, is(doc.id));
+
+		assertThat(retrieved.models.get(0).entrySet(), hasSize(2));
+
+		assertThat(retrieved.models.get(0).get("key1"), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get("key1").value(), equalTo("value1"));
+
+		assertThat(retrieved.models.get(0).get("key2"), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get("key2").value(), equalTo("value2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldAddTypeInformationOnDocumentWithNestedCollectionObjectInsertedAtSecondIndex() {
+
+		DocumentWithNestedCollection doc = new DocumentWithNestedCollection();
+
+		Map<String, Model> entry = new HashMap<String, Model>();
+		entry.put("key1", new ModelA("value1"));
+		doc.models.add(entry);
+
+		template.save(doc);
+
+		Query query = query(where("id").is(doc.id));
+		Update update = Update.update("models.1", Collections.singletonMap("key2", new ModelA("value2")));
+
+		assertThat(template.findOne(query, DocumentWithNestedCollection.class), notNullValue());
+
+		template.findAndModify(query, update, DocumentWithNestedCollection.class);
+
+		DocumentWithNestedCollection retrieved = template.findOne(query, DocumentWithNestedCollection.class);
+
+		assertThat(retrieved, is(notNullValue()));
+		assertThat(retrieved.id, is(doc.id));
+
+		assertThat(retrieved.models.get(0).entrySet(), hasSize(1));
+		assertThat(retrieved.models.get(1).entrySet(), hasSize(1));
+
+		assertThat(retrieved.models.get(0).get("key1"), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get("key1").value(), equalTo("value1"));
+
+		assertThat(retrieved.models.get(1).get("key2"), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(1).get("key2").value(), equalTo("value2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldRetainTypeInformationWithinUpdatedTypeOnEmbeddedDocumentWithCollectionWhenUpdatingPositionedElement()
+			throws Exception {
+
+		List<Model> models = new ArrayList<Model>();
+		models.add(new ModelA("value1"));
+
+		DocumentWithEmbeddedDocumentWithCollection doc = new DocumentWithEmbeddedDocumentWithCollection(
+				new DocumentWithCollection(models));
+
+		template.save(doc);
+
+		Query query = query(where("id").is(doc.id));
+		Update update = Update.update("embeddedDocument.models.0", new ModelA("value2"));
+
+		assertThat(template.findOne(query, DocumentWithEmbeddedDocumentWithCollection.class), notNullValue());
+
+		template.findAndModify(query, update, DocumentWithEmbeddedDocumentWithCollection.class);
+
+		DocumentWithEmbeddedDocumentWithCollection retrieved = template.findOne(query,
+				DocumentWithEmbeddedDocumentWithCollection.class);
+
+		assertThat(retrieved, notNullValue());
+		assertThat(retrieved.embeddedDocument.models, hasSize(1));
+		assertThat(retrieved.embeddedDocument.models.get(0).value(), is("value2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldAddTypeInformationWithinUpdatedTypeOnEmbeddedDocumentWithCollectionWhenUpdatingSecondElement()
+			throws Exception {
+
+		List<Model> models = new ArrayList<Model>();
+		models.add(new ModelA("value1"));
+
+		DocumentWithEmbeddedDocumentWithCollection doc = new DocumentWithEmbeddedDocumentWithCollection(
+				new DocumentWithCollection(models));
+
+		template.save(doc);
+
+		Query query = query(where("id").is(doc.id));
+		Update update = Update.update("embeddedDocument.models.1", new ModelA("value2"));
+
+		assertThat(template.findOne(query, DocumentWithEmbeddedDocumentWithCollection.class), notNullValue());
+
+		template.findAndModify(query, update, DocumentWithEmbeddedDocumentWithCollection.class);
+
+		DocumentWithEmbeddedDocumentWithCollection retrieved = template.findOne(query,
+				DocumentWithEmbeddedDocumentWithCollection.class);
+
+		assertThat(retrieved, notNullValue());
+		assertThat(retrieved.embeddedDocument.models, hasSize(2));
+		assertThat(retrieved.embeddedDocument.models.get(0).value(), is("value1"));
+		assertThat(retrieved.embeddedDocument.models.get(1).value(), is("value2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldAddTypeInformationWithinUpdatedTypeOnEmbeddedDocumentWithCollectionWhenRewriting()
+			throws Exception {
+
+		List<Model> models = Arrays.<Model> asList(new ModelA("value1"));
+
+		DocumentWithEmbeddedDocumentWithCollection doc = new DocumentWithEmbeddedDocumentWithCollection(
+				new DocumentWithCollection(models));
+
+		template.save(doc);
+
+		Query query = query(where("id").is(doc.id));
+		Update update = Update.update("embeddedDocument",
+				new DocumentWithCollection(Arrays.<Model> asList(new ModelA("value2"))));
+
+		assertThat(template.findOne(query, DocumentWithEmbeddedDocumentWithCollection.class), notNullValue());
+
+		template.findAndModify(query, update, DocumentWithEmbeddedDocumentWithCollection.class);
+
+		DocumentWithEmbeddedDocumentWithCollection retrieved = template.findOne(query,
+				DocumentWithEmbeddedDocumentWithCollection.class);
+
+		assertThat(retrieved, notNullValue());
+		assertThat(retrieved.embeddedDocument.models, hasSize(1));
+		assertThat(retrieved.embeddedDocument.models.get(0).value(), is("value2"));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyShouldAddTypeInformationWithinUpdatedTypeOnDocumentWithNestedLists() {
+
+		DocumentWithNestedList doc = new DocumentWithNestedList();
+
+		List<Model> entry = new ArrayList<Model>();
+		entry.add(new ModelA("value1"));
+		doc.models.add(entry);
+
+		template.save(doc);
+
+		Query query = query(where("id").is(doc.id));
+
+		assertThat(template.findOne(query, DocumentWithNestedList.class), notNullValue());
+
+		Update update = Update.update("models.0.1", new ModelA("value2"));
+
+		template.findAndModify(query, update, DocumentWithNestedList.class);
+
+		DocumentWithNestedList retrieved = template.findOne(query, DocumentWithNestedList.class);
+
+		assertThat(retrieved, is(notNullValue()));
+		assertThat(retrieved.id, is(doc.id));
+
+		assertThat(retrieved.models.get(0), hasSize(2));
+
+		assertThat(retrieved.models.get(0).get(0), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get(0).value(), equalTo("value1"));
+
+		assertThat(retrieved.models.get(0).get(1), instanceOf(ModelA.class));
+		assertThat(retrieved.models.get(0).get(1).value(), equalTo("value2"));
+	}
+
+	/**
 	 * @see DATAMONGO-407
 	 */
 	@Test
@@ -2491,10 +2715,392 @@ public class MongoTemplateTests {
 		assertThat(result.get(0).dbRefProperty.field, is(sample.field));
 	}
 
+	/**
+	 * @see DATAMONGO-566
+	 */
+	@Test
+	public void testFindAllAndRemoveFullyReturnsAndRemovesDocuments() {
+
+		Sample spring = new Sample("100", "spring");
+		Sample data = new Sample("200", "data");
+		Sample mongodb = new Sample("300", "mongodb");
+		template.insert(Arrays.asList(spring, data, mongodb), Sample.class);
+
+		Query qry = query(where("field").in("spring", "mongodb"));
+		List<Sample> result = template.findAllAndRemove(qry, Sample.class);
+
+		assertThat(result, hasSize(2));
+
+		assertThat(
+				template.getDb().getCollection("sample")
+						.find(new BasicDBObject("field", new BasicDBObject("$in", Arrays.asList("spring", "mongodb")))).count(),
+				is(0));
+		assertThat(template.getDb().getCollection("sample").find(new BasicDBObject("field", "data")).count(), is(1));
+	}
+
+	/**
+	 * @see DATAMONGO-1001
+	 */
+	@Test
+	public void shouldAllowSavingOfLazyLoadedDbRefs() {
+
+		template.dropCollection(SomeTemplate.class);
+		template.dropCollection(SomeMessage.class);
+		template.dropCollection(SomeContent.class);
+
+		SomeContent content = new SomeContent();
+		content.id = "content-1";
+		content.text = "spring";
+		template.save(content);
+
+		SomeTemplate tmpl = new SomeTemplate();
+		tmpl.id = "template-1";
+		tmpl.content = content; // @DBRef(lazy=true) tmpl.content
+
+		template.save(tmpl);
+
+		SomeTemplate savedTmpl = template.findById(tmpl.id, SomeTemplate.class);
+
+		SomeContent loadedContent = savedTmpl.getContent();
+		loadedContent.setText("data");
+		template.save(loadedContent);
+
+		assertThat(template.findById(content.id, SomeContent.class).getText(), is("data"));
+
+	}
+
+	/**
+	 * @see DATAMONGO-880
+	 */
+	@Test
+	public void savingAndReassigningLazyLoadingProxies() {
+
+		template.dropCollection(SomeTemplate.class);
+		template.dropCollection(SomeMessage.class);
+		template.dropCollection(SomeContent.class);
+
+		SomeContent content = new SomeContent();
+		content.id = "C1";
+		content.text = "BUBU";
+		template.save(content);
+
+		SomeTemplate tmpl = new SomeTemplate();
+		tmpl.id = "T1";
+		tmpl.content = content; // @DBRef(lazy=true) tmpl.content
+
+		template.save(tmpl);
+
+		SomeTemplate savedTmpl = template.findById(tmpl.id, SomeTemplate.class);
+
+		SomeMessage message = new SomeMessage();
+		message.id = "M1";
+		message.dbrefContent = savedTmpl.content; // @DBRef message.dbrefContent
+		message.normalContent = savedTmpl.content;
+
+		template.save(message);
+
+		SomeMessage savedMessage = template.findById(message.id, SomeMessage.class);
+
+		assertThat(savedMessage.dbrefContent.text, is(content.text));
+		assertThat(savedMessage.normalContent.text, is(content.text));
+	}
+
+	/**
+	 * @see DATAMONGO-884
+	 */
+	@Test
+	public void callingNonObjectMethodsOnLazyLoadingProxyShouldReturnNullIfUnderlyingDbrefWasDeletedInbetween() {
+
+		template.dropCollection(SomeTemplate.class);
+		template.dropCollection(SomeContent.class);
+
+		SomeContent content = new SomeContent();
+		content.id = "C1";
+		content.text = "BUBU";
+		template.save(content);
+
+		SomeTemplate tmpl = new SomeTemplate();
+		tmpl.id = "T1";
+		tmpl.content = content; // @DBRef(lazy=true) tmpl.content
+
+		template.save(tmpl);
+
+		SomeTemplate savedTmpl = template.findById(tmpl.id, SomeTemplate.class);
+
+		template.remove(content);
+
+		assertThat(savedTmpl.getContent().toString(), is("someContent:C1$LazyLoadingProxy"));
+		assertThat(savedTmpl.getContent(), is(instanceOf(LazyLoadingProxy.class)));
+		assertThat(savedTmpl.getContent().getText(), is(nullValue()));
+	}
+
+	/**
+	 * @see DATAMONGO-471
+	 */
+	@Test
+	public void updateMultiShouldAddValuesCorrectlyWhenUsingAddToSetWithEach() {
+
+		DocumentWithCollectionOfSimpleType document = new DocumentWithCollectionOfSimpleType();
+		document.values = Arrays.asList("spring");
+		template.save(document);
+
+		Query query = query(where("id").is(document.id));
+		assumeThat(template.findOne(query, DocumentWithCollectionOfSimpleType.class).values, hasSize(1));
+
+		Update update = new Update().addToSet("values").each("data", "mongodb");
+		template.updateMulti(query, update, DocumentWithCollectionOfSimpleType.class);
+
+		assertThat(template.findOne(query, DocumentWithCollectionOfSimpleType.class).values, hasSize(3));
+	}
+
+	/**
+	 * @see DATAMONGO-1210
+	 */
+	@Test
+	public void findAndModifyAddToSetWithEachShouldNotAddDuplicatesNorTypeHintForSimpleDocuments() {
+
+		DocumentWithCollectionOfSamples doc = new DocumentWithCollectionOfSamples();
+		doc.samples = Arrays.asList(new Sample(null, "sample1"));
+
+		template.save(doc);
+
+		Query query = query(where("id").is(doc.id));
+
+		assertThat(template.findOne(query, DocumentWithCollectionOfSamples.class), notNullValue());
+
+		Update update = new Update().addToSet("samples").each(new Sample(null, "sample2"), new Sample(null, "sample1"));
+
+		template.findAndModify(query, update, DocumentWithCollectionOfSamples.class);
+
+		DocumentWithCollectionOfSamples retrieved = template.findOne(query, DocumentWithCollectionOfSamples.class);
+
+		assertThat(retrieved, notNullValue());
+		assertThat(retrieved.samples, hasSize(2));
+		assertThat(retrieved.samples.get(0).field, is("sample1"));
+		assertThat(retrieved.samples.get(1).field, is("sample2"));
+	}
+
+	/**
+	 * @see DATAMONGO-888
+	 */
+	@Test
+	public void sortOnIdFieldPropertyShouldBeMappedCorrectly() {
+
+		DoucmentWithNamedIdField one = new DoucmentWithNamedIdField();
+		one.someIdKey = "1";
+		one.value = "a";
+
+		DoucmentWithNamedIdField two = new DoucmentWithNamedIdField();
+		two.someIdKey = "2";
+		two.value = "b";
+
+		template.save(one);
+		template.save(two);
+
+		Query query = query(where("_id").in("1", "2")).with(new Sort(Direction.DESC, "someIdKey"));
+		assertThat(template.find(query, DoucmentWithNamedIdField.class), contains(two, one));
+	}
+
+	/**
+	 * @see DATAMONGO-888
+	 */
+	@Test
+	public void sortOnAnnotatedFieldPropertyShouldBeMappedCorrectly() {
+
+		DoucmentWithNamedIdField one = new DoucmentWithNamedIdField();
+		one.someIdKey = "1";
+		one.value = "a";
+
+		DoucmentWithNamedIdField two = new DoucmentWithNamedIdField();
+		two.someIdKey = "2";
+		two.value = "b";
+
+		template.save(one);
+		template.save(two);
+
+		Query query = query(where("_id").in("1", "2")).with(new Sort(Direction.DESC, "value"));
+		assertThat(template.find(query, DoucmentWithNamedIdField.class), contains(two, one));
+	}
+
+	/**
+	 * @see DATAMONGO-913
+	 */
+	@Test
+	public void shouldRetrieveInitializedValueFromDbRefAssociationAfterLoad() {
+
+		SomeContent content = new SomeContent();
+		content.id = "content-1";
+		content.name = "Content 1";
+		content.text = "Some text";
+
+		template.save(content);
+
+		SomeTemplate tmpl = new SomeTemplate();
+		tmpl.id = "template-1";
+		tmpl.content = content;
+
+		template.save(tmpl);
+
+		SomeTemplate result = template.findOne(query(where("content").is(tmpl.getContent())), SomeTemplate.class);
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.getContent(), is(notNullValue()));
+		assertThat(result.getContent().getId(), is(notNullValue()));
+		assertThat(result.getContent().getName(), is(notNullValue()));
+		assertThat(result.getContent().getText(), is(content.getText()));
+	}
+
+	/**
+	 * @see DATAMONGO-913
+	 */
+	@Test
+	public void shouldReuseExistingDBRefInQueryFromDbRefAssociationAfterLoad() {
+
+		SomeContent content = new SomeContent();
+		content.id = "content-1";
+		content.name = "Content 1";
+		content.text = "Some text";
+
+		template.save(content);
+
+		SomeTemplate tmpl = new SomeTemplate();
+		tmpl.id = "template-1";
+		tmpl.content = content;
+
+		template.save(tmpl);
+
+		SomeTemplate result = template.findOne(query(where("content").is(tmpl.getContent())), SomeTemplate.class);
+
+		// Use lazy-loading-proxy in query
+		result = template.findOne(query(where("content").is(result.getContent())), SomeTemplate.class);
+
+		assertNotNull(result.getContent().getName());
+		assertThat(result.getContent().getName(), is(content.getName()));
+	}
+
+	/**
+	 * @see DATAMONGO-970
+	 */
+	@Test
+	public void insertsAndRemovesBasicDbObjectCorrectly() {
+
+		BasicDBObject object = new BasicDBObject("key", "value");
+		template.insert(object, "collection");
+
+		assertThat(object.get("_id"), is(notNullValue()));
+		assertThat(template.findAll(DBObject.class, "collection"), hasSize(1));
+
+		template.remove(object, "collection");
+		assertThat(template.findAll(DBObject.class, "collection"), hasSize(0));
+	}
+
+	/**
+	 * @see DATAMONGO-1207
+	 */
+	@Test
+	public void ignoresNullElementsForInsertAll() {
+
+		Address newYork = new Address("NY", "New York");
+		Address washington = new Address("DC", "Washington");
+
+		template.insertAll(Arrays.asList(newYork, null, washington));
+
+		List<Address> result = template.findAll(Address.class);
+
+		assertThat(result, hasSize(2));
+		assertThat(result, hasItems(newYork, washington));
+	}
+
+	/**
+	 * @see DATAMONGO-1208
+	 */
+	@Test
+	public void takesSortIntoAccountWhenStreaming() {
+
+		Person youngestPerson = new Person("John", 20);
+		Person oldestPerson = new Person("Jane", 42);
+
+		template.insertAll(Arrays.asList(oldestPerson, youngestPerson));
+
+		Query q = new Query();
+		q.with(new Sort(Direction.ASC, "age"));
+		CloseableIterator<Person> stream = template.stream(q, Person.class);
+
+		assertThat(stream.next().getAge(), is(youngestPerson.getAge()));
+		assertThat(stream.next().getAge(), is(oldestPerson.getAge()));
+	}
+
+	/**
+	 * @see DATAMONGO-1208
+	 */
+	@Test
+	public void takesLimitIntoAccountWhenStreaming() {
+		
+		Person youngestPerson = new Person("John", 20);
+		Person oldestPerson = new Person("Jane", 42);
+
+		template.insertAll(Arrays.asList(oldestPerson, youngestPerson));
+
+		Query q = new Query();
+		q.with(new PageRequest(0, 1, new Sort(Direction.ASC, "age")));
+		CloseableIterator<Person> stream = template.stream(q, Person.class);
+
+		assertThat(stream.next().getAge(), is(youngestPerson.getAge()));
+		assertThat(stream.hasNext(), is(false));
+	}
+
+	static class DoucmentWithNamedIdField {
+
+		@Id String someIdKey;
+
+		@Field(value = "val")//
+		String value;
+
+		@Override
+		public int hashCode() {
+			final int prime = 31;
+			int result = 1;
+			result = prime * result + (someIdKey == null ? 0 : someIdKey.hashCode());
+			result = prime * result + (value == null ? 0 : value.hashCode());
+			return result;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			if (this == obj) {
+				return true;
+			}
+			if (obj == null) {
+				return false;
+			}
+			if (!(obj instanceof DoucmentWithNamedIdField)) {
+				return false;
+			}
+			DoucmentWithNamedIdField other = (DoucmentWithNamedIdField) obj;
+			if (someIdKey == null) {
+				if (other.someIdKey != null) {
+					return false;
+				}
+			} else if (!someIdKey.equals(other.someIdKey)) {
+				return false;
+			}
+			if (value == null) {
+				if (other.value != null) {
+					return false;
+				}
+			} else if (!value.equals(other.value)) {
+				return false;
+			}
+			return true;
+		}
+
+	}
+
 	static class DocumentWithDBRefCollection {
 
 		@Id public String id;
 
+		@Field("db_ref_list")/** @see DATAMONGO-1058 */
 		@org.springframework.data.mongodb.core.mapping.DBRef//
 		public List<Sample> dbRefAnnotatedList;
 
@@ -2518,10 +3124,34 @@ public class MongoTemplateTests {
 		List<String> values;
 	}
 
+	static class DocumentWithCollectionOfSamples {
+		@Id String id;
+		List<Sample> samples;
+	}
+
 	static class DocumentWithMultipleCollections {
 		@Id String id;
 		List<String> string1;
 		List<String> string2;
+	}
+
+	static class DocumentWithNestedCollection {
+		@Id String id;
+		List<Map<String, Model>> models = new ArrayList<Map<String, Model>>();
+	}
+
+	static class DocumentWithNestedList {
+		@Id String id;
+		List<List<Model>> models = new ArrayList<List<Model>>();
+	}
+
+	static class DocumentWithEmbeddedDocumentWithCollection {
+		@Id String id;
+		DocumentWithCollection embeddedDocument;
+
+		DocumentWithEmbeddedDocumentWithCollection(DocumentWithCollection embeddedDocument) {
+			this.embeddedDocument = embeddedDocument;
+		}
 	}
 
 	static interface Model {
@@ -2629,6 +3259,41 @@ public class MongoTemplateTests {
 
 		String state;
 		String city;
+
+		Address() {}
+
+		Address(String state, String city) {
+			this.state = state;
+			this.city = city;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+
+			if (obj == this) {
+				return true;
+			}
+
+			if (!(obj instanceof Address)) {
+				return false;
+			}
+
+			Address that = (Address) obj;
+
+			return ObjectUtils.nullSafeEquals(this.city, that.city) && //
+					ObjectUtils.nullSafeEquals(this.state, that.state);
+		}
+
+		@Override
+		public int hashCode() {
+
+			int result = 17;
+
+			result += 31 * ObjectUtils.nullSafeHashCode(this.city);
+			result += 31 * ObjectUtils.nullSafeHashCode(this.state);
+
+			return result;
+		}
 	}
 
 	static class VersionedPerson {
@@ -2669,5 +3334,45 @@ public class MongoTemplateTests {
 
 		@Id String id;
 		EnumValue value;
+	}
+
+	public static class SomeTemplate {
+
+		String id;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) SomeContent content;
+
+		public SomeContent getContent() {
+			return content;
+		}
+	}
+
+	public static class SomeContent {
+
+		String id;
+		String text;
+		String name;
+
+		public String getName() {
+			return name;
+		}
+
+		public void setText(String text) {
+			this.text = text;
+
+		}
+
+		public String getId() {
+			return id;
+		}
+
+		public String getText() {
+			return text;
+		}
+	}
+
+	static class SomeMessage {
+		String id;
+		@org.springframework.data.mongodb.core.mapping.DBRef SomeContent dbrefContent;
+		SomeContent normalContent;
 	}
 }

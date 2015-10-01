@@ -1,11 +1,11 @@
-<?xml version="1.0" encoding="UTF-8"?>
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
 	<modelVersion>4.0.0</modelVersion>
-	
+
 	<groupId>org.springframework.data</groupId>
 	<artifactId>spring-data-mongodb-parent</artifactId>
-	<version>1.5.0.BUILD-SNAPSHOT</version>
+	<version>1.9.0.BUILD-SNAPSHOT</version>
 	<packaging>pom</packaging>
 
 	<name>Spring Data MongoDB</name>
@@ -15,8 +15,7 @@
 	<parent>
 		<groupId>org.springframework.data.build</groupId>
 		<artifactId>spring-data-parent</artifactId>
-		<version>1.4.0.BUILD-SNAPSHOT</version>
-		<relativePath>../spring-data-build/parent/pom.xml</relativePath>
+		<version>1.8.0.BUILD-SNAPSHOT</version>
 	</parent>
 
 	<modules>
@@ -29,11 +28,11 @@
 	<properties>
 		<project.type>multi</project.type>
 		<dist.id>spring-data-mongodb</dist.id>
-		<springdata.commons>1.8.0.BUILD-SNAPSHOT</springdata.commons>
-		<mongo>2.11.4</mongo>
-		<mongo-osgi>${mongo}</mongo-osgi>
+		<springdata.commons>1.12.0.BUILD-SNAPSHOT</springdata.commons>
+		<mongo>2.13.0</mongo>
+		<mongo.osgi>2.13.0</mongo.osgi>
 	</properties>
-	
+
 	<developers>
 		<developer>
 			<id>ogierke</id>
@@ -105,11 +104,44 @@
 
 	<profiles>
 		<profile>
+
 			<id>mongo-next</id>
 			<properties>
-				<mongo>2.12.0-rc0</mongo>
-				<mongo-osgi>2.12.0</mongo-osgi>
+				<mongo>2.14.0-SNAPSHOT</mongo>
 			</properties>
+
+			<repositories>
+				<repository>
+					<id>mongo-snapshots</id>
+					<url>https://oss.sonatype.org/content/repositories/snapshots</url>
+				</repository>
+			</repositories>
+
+		</profile>
+
+		<profile>
+
+			<id>mongo3</id>
+			<properties>
+				<mongo>3.0.2</mongo>
+			</properties>
+
+		</profile>
+
+		<profile>
+
+			<id>mongo3-next</id>
+			<properties>
+				<mongo>3.0.0-SNAPSHOT</mongo>
+			</properties>
+
+			<repositories>
+				<repository>
+					<id>mongo-snapshots</id>
+					<url>https://oss.sonatype.org/content/repositories/snapshots</url>
+				</repository>
+			</repositories>
+
 		</profile>
 	</profiles>
 
@@ -121,18 +153,18 @@
 			<version>${mongo}</version>
 		</dependency>
 	</dependencies>
-	
+
 	<repositories>
 		<repository>
 			<id>spring-libs-snapshot</id>
-			<url>http://repo.spring.io/libs-snapshot/</url>
+			<url>https://repo.spring.io/libs-snapshot</url>
 		</repository>
 	</repositories>
-	
+
 	<pluginRepositories>
 		<pluginRepository>
 			<id>spring-plugins-release</id>
-			<url>http://repo.spring.io/plugins-release</url>
+			<url>https://repo.spring.io/plugins-release</url>
 		</pluginRepository>
 	</pluginRepositories>
 

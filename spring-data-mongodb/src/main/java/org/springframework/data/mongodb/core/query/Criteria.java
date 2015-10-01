@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2014 the original author or authors.
+ * Copyright 2010-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,12 +25,16 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 import org.bson.BSON;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Point;
+import org.springframework.data.geo.Shape;
 import org.springframework.data.mongodb.InvalidMongoDbApiUsageException;
-import org.springframework.data.mongodb.core.geo.Circle;
-import org.springframework.data.mongodb.core.geo.Point;
-import org.springframework.data.mongodb.core.geo.Shape;
+import org.springframework.data.mongodb.core.geo.GeoJson;
+import org.springframework.data.mongodb.core.geo.Sphere;
 import org.springframework.util.Assert;
+import org.springframework.util.CollectionUtils;
 import org.springframework.util.ObjectUtils;
+import org.springframework.util.StringUtils;
 
 import com.mongodb.BasicDBList;
 import com.mongodb.BasicDBObject;
@@ -186,8 +190,8 @@ public class Criteria implements CriteriaDefinition {
 	 */
 	public Criteria in(Object... o) {
 		if (o.length > 1 && o[1] instanceof Collection) {
-			throw new InvalidMongoDbApiUsageException("You can only pass in one argument of type "
-					+ o[1].getClass().getName());
+			throw new InvalidMongoDbApiUsageException(
+					"You can only pass in one argument of type " + o[1].getClass().getName());
 		}
 		criteria.put("$in", Arrays.asList(o));
 		return this;
@@ -373,8 +377,8 @@ public class Criteria implements CriteriaDefinition {
 	}
 
 	/**
-	 * Creates a geospatial criterion using a {@literal $within $centerSphere} operation. This is only available for Mongo
-	 * 1.7 and higher.
+	 * Creates a geospatial criterion using a {@literal $geoWithin $centerSphere} operation. This is only available for
+	 * Mongo 2.4 and higher.
 	 * 
 	 * @see http://docs.mongodb.org/manual/reference/operator/query/geoWithin/
 	 * @see http://docs.mongodb.org/manual/reference/operator/query/centerSphere/
@@ -383,12 +387,12 @@ public class Criteria implements CriteriaDefinition {
 	 */
 	public Criteria withinSphere(Circle circle) {
 		Assert.notNull(circle);
-		criteria.put("$within", new BasicDBObject("$centerSphere", circle.asList()));
+		criteria.put("$geoWithin", new GeoCommand(new Sphere(circle)));
 		return this;
 	}
 
 	/**
-	 * Creates a geospatial criterion using a {@literal $within} operation.
+	 * Creates a geospatial criterion using a {@literal $geoWithin} operation.
 	 * 
 	 * @see http://docs.mongodb.org/manual/reference/operator/query/geoWithin/
 	 * @param shape
@@ -397,7 +401,7 @@ public class Criteria implements CriteriaDefinition {
 	public Criteria within(Shape shape) {
 
 		Assert.notNull(shape);
-		criteria.put("$within", new BasicDBObject(shape.getCommand(), shape.asList()));
+		criteria.put("$geoWithin", new GeoCommand(shape));
 		return this;
 	}
 
@@ -410,7 +414,7 @@ public class Criteria implements CriteriaDefinition {
 	 */
 	public Criteria near(Point point) {
 		Assert.notNull(point);
-		criteria.put("$near", point.asList());
+		criteria.put("$near", point);
 		return this;
 	}
 
@@ -424,19 +428,60 @@ public class Criteria implements CriteriaDefinition {
 	 */
 	public Criteria nearSphere(Point point) {
 		Assert.notNull(point);
-		criteria.put("$nearSphere", point.asList());
+		criteria.put("$nearSphere", point);
 		return this;
 	}
 
 	/**
-	 * Creates a geospatical criterion using a {@literal $maxDistance} operation, for use with $near
+	 * Creates criterion using {@code $geoIntersects} operator which matches intersections of the given {@code geoJson}
+	 * structure and the documents one. Requires MongoDB 2.4 or better.
+	 * 
+	 * @param geoJson must not be {@literal null}.
+	 * @return
+	 * @since 1.8
+	 */
+	@SuppressWarnings("rawtypes")
+	public Criteria intersects(GeoJson geoJson) {
+
+		Assert.notNull(geoJson, "GeoJson must not be null!");
+		criteria.put("$geoIntersects", geoJson);
+		return this;
+	}
+
+	/**
+	 * Creates a geo-spatial criterion using a {@literal $maxDistance} operation, for use with $near
 	 * 
 	 * @see http://docs.mongodb.org/manual/reference/operator/query/maxDistance/
 	 * @param maxDistance
 	 * @return
 	 */
 	public Criteria maxDistance(double maxDistance) {
+
+		if (createNearCriteriaForCommand("$near", "$maxDistance", maxDistance)
+				|| createNearCriteriaForCommand("$nearSphere", "$maxDistance", maxDistance)) {
+			return this;
+		}
+
 		criteria.put("$maxDistance", maxDistance);
+		return this;
+	}
+
+	/**
+	 * Creates a geospatial criterion using a {@literal $minDistance} operation, for use with {@literal $near} or
+	 * {@literal $nearSphere}.
+	 * 
+	 * @param minDistance
+	 * @return
+	 * @since 1.7
+	 */
+	public Criteria minDistance(double minDistance) {
+
+		if (createNearCriteriaForCommand("$near", "$minDistance", minDistance)
+				|| createNearCriteriaForCommand("$nearSphere", "$minDistance", minDistance)) {
+			return this;
+		}
+
+		criteria.put("$minDistance", minDistance);
 		return this;
 	}
 
@@ -497,8 +542,8 @@ public class Criteria implements CriteriaDefinition {
 	private Criteria registerCriteriaChainElement(Criteria criteria) {
 
 		if (lastOperatorWasNot()) {
-			throw new IllegalArgumentException("operator $not is not allowed around criteria chain element: "
-					+ criteria.getCriteriaObject());
+			throw new IllegalArgumentException(
+					"operator $not is not allowed around criteria chain element: " + criteria.getCriteriaObject());
 		} else {
 			criteriaChain.add(criteria);
 		}
@@ -514,8 +559,11 @@ public class Criteria implements CriteriaDefinition {
 	 * @see org.springframework.data.mongodb.core.query.CriteriaDefinition#getCriteriaObject()
 	 */
 	public DBObject getCriteriaObject() {
+
 		if (this.criteriaChain.size() == 1) {
 			return criteriaChain.get(0).getSingleCriteriaObject();
+		} else if (CollectionUtils.isEmpty(this.criteriaChain) && !CollectionUtils.isEmpty(this.criteria)) {
+			return getSingleCriteriaObject();
 		} else {
 			DBObject criteriaObject = new BasicDBObject();
 			for (Criteria c : this.criteriaChain) {
@@ -534,7 +582,13 @@ public class Criteria implements CriteriaDefinition {
 		boolean not = false;
 
 		for (String k : this.criteria.keySet()) {
+
 			Object value = this.criteria.get(k);
+
+			if (requiresGeoJsonFormat(value)) {
+				value = new BasicDBObject("$geometry", value);
+			}
+
 			if (not) {
 				DBObject notDbo = new BasicDBObject();
 				notDbo.put(k, value);
@@ -547,6 +601,13 @@ public class Criteria implements CriteriaDefinition {
 					dbo.put(k, value);
 				}
 			}
+		}
+
+		if (!StringUtils.hasText(this.key)) {
+			if (not) {
+				return new BasicDBObject("$not", dbo);
+			}
+			return dbo;
 		}
 
 		DBObject queryCriteria = new BasicDBObject();
@@ -578,6 +639,31 @@ public class Criteria implements CriteriaDefinition {
 					+ "you can't add a second '" + key + "' expression specified as '" + key + " : " + value + "'. "
 					+ "Criteria already contains '" + key + " : " + existing + "'.");
 		}
+	}
+
+	private boolean createNearCriteriaForCommand(String command, String operation, double maxDistance) {
+
+		if (!criteria.containsKey(command)) {
+			return false;
+		}
+
+		Object existingNearOperationValue = criteria.get(command);
+
+		if (existingNearOperationValue instanceof DBObject) {
+
+			((DBObject) existingNearOperationValue).put(operation, maxDistance);
+
+			return true;
+
+		} else if (existingNearOperationValue instanceof GeoJson) {
+
+			BasicDBObject dbo = new BasicDBObject("$geometry", existingNearOperationValue).append(operation, maxDistance);
+			criteria.put(command, dbo);
+
+			return true;
+		}
+
+		return false;
 	}
 
 	/* 
@@ -657,5 +743,10 @@ public class Criteria implements CriteriaDefinition {
 		result += nullSafeHashCode(isValue);
 
 		return result;
+	}
+
+	private static boolean requiresGeoJsonFormat(Object value) {
+		return value instanceof GeoJson
+				|| (value instanceof GeoCommand && ((GeoCommand) value).getShape() instanceof GeoJson);
 	}
 }

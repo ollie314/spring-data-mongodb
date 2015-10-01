@@ -21,7 +21,11 @@ import static org.junit.Assert.*;
 import java.util.Collections;
 import java.util.Map;
 
+import org.joda.time.DateTime;
 import org.junit.Test;
+
+import com.mongodb.BasicDBObject;
+import com.mongodb.BasicDBObjectBuilder;
 
 /**
  * Test cases for {@link Update}.
@@ -30,6 +34,7 @@ import org.junit.Test;
  * @author Thomas Risberg
  * @author Becca Gaspard
  * @author Christoph Strobl
+ * @author Thomas Darimont
  */
 public class UpdateTests {
 
@@ -283,5 +288,200 @@ public class UpdateTests {
 	@Test(expected = IllegalArgumentException.class)
 	public void testCreatingUpdateWithNullKeyThrowsException() {
 		Update.update(null, "value");
+	}
+
+	/**
+	 * @see DATAMONGO-953
+	 */
+	@Test
+	public void testEquality() {
+
+		Update actualUpdate = new Update() //
+				.inc("size", 1) //
+				.set("nl", null) //
+				.set("directory", "/Users/Test/Desktop") //
+				.push("authors", Collections.singletonMap("name", "Sven")) //
+				.pop("authors", Update.Position.FIRST) //
+				.set("foo", "bar");
+
+		Update expectedUpdate = new Update() //
+				.inc("size", 1) //
+				.set("nl", null) //
+				.set("directory", "/Users/Test/Desktop") //
+				.push("authors", Collections.singletonMap("name", "Sven")) //
+				.pop("authors", Update.Position.FIRST) //
+				.set("foo", "bar");
+
+		assertThat(actualUpdate, is(equalTo(actualUpdate)));
+		assertThat(actualUpdate.hashCode(), is(equalTo(actualUpdate.hashCode())));
+		assertThat(actualUpdate, is(equalTo(expectedUpdate)));
+		assertThat(actualUpdate.hashCode(), is(equalTo(expectedUpdate.hashCode())));
+	}
+
+	/**
+	 * @see DATAMONGO-953
+	 */
+	@Test
+	public void testToString() {
+
+		Update actualUpdate = new Update() //
+				.inc("size", 1) //
+				.set("nl", null) //
+				.set("directory", "/Users/Test/Desktop") //
+				.push("authors", Collections.singletonMap("name", "Sven")) //
+				.pop("authors", Update.Position.FIRST) //
+				.set("foo", "bar");
+
+		Update expectedUpdate = new Update() //
+				.inc("size", 1) //
+				.set("nl", null) //
+				.set("directory", "/Users/Test/Desktop") //
+				.push("authors", Collections.singletonMap("name", "Sven")) //
+				.pop("authors", Update.Position.FIRST) //
+				.set("foo", "bar");
+
+		assertThat(actualUpdate.toString(), is(equalTo(expectedUpdate.toString())));
+		assertThat(actualUpdate.toString(), is("{ \"$inc\" : { \"size\" : 1} ," //
+				+ " \"$set\" : { \"nl\" :  null  , \"directory\" : \"/Users/Test/Desktop\" , \"foo\" : \"bar\"} , " //
+				+ "\"$push\" : { \"authors\" : { \"name\" : \"Sven\"}} " //
+				+ ", \"$pop\" : { \"authors\" : -1}}")); //
+	}
+
+	/**
+	 * @see DATAMONGO-944
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCurrentDateCorrectlyForSingleFieldWhenUsingDate() {
+
+		Update update = new Update().currentDate("foo");
+		assertThat(update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$currentDate", new BasicDBObject("foo", true)).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-944
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCurrentDateCorrectlyForMultipleFieldsWhenUsingDate() {
+
+		Update update = new Update().currentDate("foo").currentDate("bar");
+		assertThat(update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$currentDate", new BasicDBObject("foo", true).append("bar", true))
+						.get()));
+	}
+
+	/**
+	 * @see DATAMONGO-944
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCurrentDateCorrectlyForSingleFieldWhenUsingTimestamp() {
+
+		Update update = new Update().currentTimestamp("foo");
+		assertThat(
+				update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$currentDate",
+						new BasicDBObject("foo", new BasicDBObject("$type", "timestamp"))).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-944
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCurrentDateCorrectlyForMultipleFieldsWhenUsingTimestamp() {
+
+		Update update = new Update().currentTimestamp("foo").currentTimestamp("bar");
+		assertThat(
+				update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add(
+						"$currentDate",
+						new BasicDBObject("foo", new BasicDBObject("$type", "timestamp")).append("bar", new BasicDBObject("$type",
+								"timestamp"))).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-944
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCurrentDateCorrectlyWhenUsingMixedDateAndTimestamp() {
+
+		Update update = new Update().currentDate("foo").currentTimestamp("bar");
+		assertThat(
+				update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$currentDate",
+						new BasicDBObject("foo", true).append("bar", new BasicDBObject("$type", "timestamp"))).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1002
+	 */
+	@Test
+	public void toStringWorksForUpdateWithComplexObject() {
+
+		Update update = new Update().addToSet("key", new DateTime());
+		assertThat(update.toString(), is(notNullValue()));
+	}
+
+	/**
+	 * @see DATAMONGO-1097
+	 */
+	@Test(expected = IllegalArgumentException.class)
+	public void multiplyShouldThrowExceptionForNullMultiplier() {
+		new Update().multiply("key", null);
+	}
+
+	/**
+	 * @see DATAMONGO-1097
+	 */
+	@Test
+	public void multiplyShouldAddMultiplierAsItsDoubleValue() {
+
+		Update update = new Update().multiply("key", 10);
+
+		assertThat(update.getUpdateObject(), equalTo(new BasicDBObjectBuilder().add("$mul", new BasicDBObject("key", 10D))
+				.get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1101
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCorrectRepresentationForBitwiseAnd() {
+
+		Update update = new Update().bitwise("key").and(10L);
+
+		assertThat(update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$bit", new BasicDBObject("key", new BasicDBObject("and", 10L))).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1101
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCorrectRepresentationForBitwiseOr() {
+
+		Update update = new Update().bitwise("key").or(10L);
+
+		assertThat(update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$bit", new BasicDBObject("key", new BasicDBObject("or", 10L))).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1101
+	 */
+	@Test
+	public void getUpdateObjectShouldReturnCorrectRepresentationForBitwiseXor() {
+
+		Update update = new Update().bitwise("key").xor(10L);
+
+		assertThat(update.getUpdateObject(),
+				equalTo(new BasicDBObjectBuilder().add("$bit", new BasicDBObject("key", new BasicDBObject("xor", 10L))).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-943
+	 */
+	@Test(expected = IllegalArgumentException.class)
+	public void pushShouldThrowExceptionWhenGivenNegativePosition() {
+		new Update().push("foo").atPosition(-1).each("booh");
 	}
 }

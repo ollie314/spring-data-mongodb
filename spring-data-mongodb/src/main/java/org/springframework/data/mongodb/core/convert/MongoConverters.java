@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2012 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,28 +20,34 @@ import java.math.BigInteger;
 import java.net.MalformedURLException;
 import java.net.URL;
 
+import org.bson.types.Code;
 import org.bson.types.ObjectId;
 import org.springframework.core.convert.ConversionFailedException;
 import org.springframework.core.convert.TypeDescriptor;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.data.convert.ReadingConverter;
+import org.springframework.data.convert.WritingConverter;
+import org.springframework.data.mongodb.core.query.Term;
+import org.springframework.data.mongodb.core.script.NamedMongoScript;
 import org.springframework.util.StringUtils;
 
+import com.mongodb.BasicDBObject;
+import com.mongodb.BasicDBObjectBuilder;
 import com.mongodb.DBObject;
 
 /**
  * Wrapper class to contain useful converters for the usage with Mongo.
  * 
  * @author Oliver Gierke
+ * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 abstract class MongoConverters {
 
 	/**
 	 * Private constructor to prevent instantiation.
 	 */
-	private MongoConverters() {
-
-	}
+	private MongoConverters() {}
 
 	/**
 	 * Simple singleton to convert {@link ObjectId}s to their {@link String} representation.
@@ -159,6 +165,67 @@ abstract class MongoConverters {
 		@Override
 		public String convert(DBObject source) {
 			return source == null ? null : source.toString();
+		}
+	}
+
+	/**
+	 * @author Christoph Strobl
+	 * @since 1.6
+	 */
+	@WritingConverter
+	public static enum TermToStringConverter implements Converter<Term, String> {
+
+		INSTANCE;
+
+		@Override
+		public String convert(Term source) {
+			return source == null ? null : source.getFormatted();
+		}
+	}
+
+	/**
+	 * @author Christoph Strobl
+	 * @since 1.7
+	 */
+	public static enum DBObjectToNamedMongoScriptCoverter implements Converter<DBObject, NamedMongoScript> {
+
+		INSTANCE;
+
+		@Override
+		public NamedMongoScript convert(DBObject source) {
+
+			if (source == null) {
+				return null;
+			}
+
+			String id = source.get("_id").toString();
+			Object rawValue = source.get("value");
+
+			return new NamedMongoScript(id, ((Code) rawValue).getCode());
+		}
+	}
+
+	/**
+	 * @author Christoph Strobl
+	 * @since 1.7
+	 */
+	public static enum NamedMongoScriptToDBObjectConverter implements Converter<NamedMongoScript, DBObject> {
+
+		INSTANCE;
+
+		@Override
+		public DBObject convert(NamedMongoScript source) {
+
+			if (source == null) {
+				return new BasicDBObject();
+			}
+
+			BasicDBObjectBuilder builder = new BasicDBObjectBuilder();
+
+			builder.append("_id", source.getName());
+			builder.append("value", new Code(source.getCode()));
+
+			return builder.get();
 		}
 	}
 }

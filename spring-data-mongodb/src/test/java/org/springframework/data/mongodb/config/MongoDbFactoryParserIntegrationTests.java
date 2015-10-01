@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,8 +17,11 @@ package org.springframework.data.mongodb.config;
 
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
+import static org.junit.Assume.*;
+import static org.springframework.data.mongodb.util.MongoClientVersion.*;
 
 import org.junit.Before;
+import org.junit.BeforeClass;
 import org.junit.Test;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConstructorArgumentValues;
@@ -31,12 +34,14 @@ import org.springframework.context.support.AbstractApplicationContext;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.mongodb.MongoDbFactory;
+import org.springframework.data.mongodb.core.ReflectiveMongoOptionsInvokerTestUtil;
 import org.springframework.data.mongodb.core.SimpleMongoDbFactory;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mongodb.DB;
 import com.mongodb.Mongo;
 import com.mongodb.MongoClient;
+import com.mongodb.MongoClientURI;
 import com.mongodb.MongoURI;
 import com.mongodb.WriteConcern;
 
@@ -44,11 +49,17 @@ import com.mongodb.WriteConcern;
  * Integration tests for {@link MongoDbFactoryParser}.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
  */
 public class MongoDbFactoryParserIntegrationTests {
 
 	DefaultListableBeanFactory factory;
 	BeanDefinitionReader reader;
+
+	@BeforeClass
+	public static void validateMongoDriver() {
+		assumeFalse(isMongo3Driver());
+	}
 
 	@Before
 	public void setUp() {
@@ -94,22 +105,6 @@ public class MongoDbFactoryParserIntegrationTests {
 		ctx.close();
 	}
 
-	private void assertWriteConcern(ClassPathXmlApplicationContext ctx, WriteConcern expectedWriteConcern) {
-		SimpleMongoDbFactory dbFactory = ctx.getBean("first", SimpleMongoDbFactory.class);
-		DB db = dbFactory.getDb();
-		assertThat(db.getName(), is("db"));
-
-		WriteConcern configuredConcern = (WriteConcern) ReflectionTestUtils.getField(dbFactory, "writeConcern");
-
-		MyWriteConcern myDbFactoryWriteConcern = new MyWriteConcern(configuredConcern);
-		MyWriteConcern myDbWriteConcern = new MyWriteConcern(db.getWriteConcern());
-		MyWriteConcern myExpectedWriteConcern = new MyWriteConcern(expectedWriteConcern);
-
-		assertThat(myDbFactoryWriteConcern, is(myExpectedWriteConcern));
-		assertThat(myDbWriteConcern, is(myExpectedWriteConcern));
-		assertThat(myDbWriteConcern, is(myDbFactoryWriteConcern));
-	}
-
 	// This test will fail since equals in WriteConcern uses == for _w and not .equals
 	public void testWriteConcernEquality() {
 		String s1 = new String("rack1");
@@ -127,18 +122,19 @@ public class MongoDbFactoryParserIntegrationTests {
 	}
 
 	/**
-	 * @see DATADOC-280
+	 * @see DATAMONGO-280
 	 */
 	@Test
+	@SuppressWarnings("deprecation")
 	public void parsesMaxAutoConnectRetryTimeCorrectly() {
 
 		reader.loadBeanDefinitions(new ClassPathResource("namespace/db-factory-bean.xml"));
 		Mongo mongo = factory.getBean(Mongo.class);
-		assertThat(mongo.getMongoOptions().maxAutoConnectRetryTime, is(27L));
+		assertThat(ReflectiveMongoOptionsInvokerTestUtil.getMaxAutoConnectRetryTime(mongo.getMongoOptions()), is(27L));
 	}
 
 	/**
-	 * @see DATADOC-295
+	 * @see DATAMONGO-295
 	 */
 	@Test
 	public void setsUpMongoDbFactoryUsingAMongoUri() {
@@ -153,7 +149,7 @@ public class MongoDbFactoryParserIntegrationTests {
 	}
 
 	/**
-	 * @see DATADOC-306
+	 * @see DATAMONGO-306
 	 */
 	@Test
 	public void setsUpMongoDbFactoryUsingAMongoUriWithoutCredentials() {
@@ -172,10 +168,50 @@ public class MongoDbFactoryParserIntegrationTests {
 	}
 
 	/**
-	 * @see DATADOC-295
+	 * @see DATAMONGO-295
 	 */
 	@Test(expected = BeanDefinitionParsingException.class)
 	public void rejectsUriPlusDetailedConfiguration() {
 		reader.loadBeanDefinitions(new ClassPathResource("namespace/mongo-uri-and-details.xml"));
+	}
+
+	/**
+	 * @see DATAMONGO-1218
+	 */
+	@Test
+	public void setsUpMongoDbFactoryUsingAMongoClientUri() {
+
+		reader.loadBeanDefinitions(new ClassPathResource("namespace/mongo-client-uri.xml"));
+		BeanDefinition definition = factory.getBeanDefinition("mongoDbFactory");
+		ConstructorArgumentValues constructorArguments = definition.getConstructorArgumentValues();
+
+		assertThat(constructorArguments.getArgumentCount(), is(1));
+		ValueHolder argument = constructorArguments.getArgumentValue(0, MongoClientURI.class);
+		assertThat(argument, is(notNullValue()));
+	}
+
+	/**
+	 * @see DATAMONGO-1218
+	 */
+	@Test(expected = BeanDefinitionParsingException.class)
+	public void rejectsClientUriPlusDetailedConfiguration() {
+		reader.loadBeanDefinitions(new ClassPathResource("namespace/mongo-client-uri-and-details.xml"));
+	}
+
+	private static void assertWriteConcern(ClassPathXmlApplicationContext ctx, WriteConcern expectedWriteConcern) {
+
+		SimpleMongoDbFactory dbFactory = ctx.getBean("first", SimpleMongoDbFactory.class);
+		DB db = dbFactory.getDb();
+		assertThat(db.getName(), is("db"));
+
+		WriteConcern configuredConcern = (WriteConcern) ReflectionTestUtils.getField(dbFactory, "writeConcern");
+
+		MyWriteConcern myDbFactoryWriteConcern = new MyWriteConcern(configuredConcern);
+		MyWriteConcern myDbWriteConcern = new MyWriteConcern(db.getWriteConcern());
+		MyWriteConcern myExpectedWriteConcern = new MyWriteConcern(expectedWriteConcern);
+
+		assertThat(myDbFactoryWriteConcern, is(myExpectedWriteConcern));
+		assertThat(myDbWriteConcern, is(myExpectedWriteConcern));
+		assertThat(myDbWriteConcern, is(myDbFactoryWriteConcern));
 	}
 }

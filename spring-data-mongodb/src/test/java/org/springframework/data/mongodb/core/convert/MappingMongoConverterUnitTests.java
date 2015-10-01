@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 package org.springframework.data.mongodb.core.convert;
 
+import static java.time.ZoneId.*;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -23,6 +24,7 @@ import static org.springframework.data.mongodb.core.DBObjectTestUtils.*;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URL;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -35,39 +37,60 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
+import java.util.TreeMap;
 
 import org.bson.types.ObjectId;
 import org.hamcrest.Matcher;
+import org.hamcrest.Matchers;
 import org.joda.time.LocalDate;
 import org.junit.Before;
+import org.junit.Ignore;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.junit.runner.RunWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.runners.MockitoJUnitRunner;
+import org.springframework.aop.framework.ProxyFactory;
+import org.springframework.beans.ConversionNotSupportedException;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.annotation.PersistenceConstructor;
 import org.springframework.data.annotation.TypeAlias;
+import org.springframework.data.convert.ReadingConverter;
+import org.springframework.data.convert.WritingConverter;
+import org.springframework.data.geo.Box;
+import org.springframework.data.geo.Circle;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Point;
+import org.springframework.data.geo.Polygon;
+import org.springframework.data.geo.Shape;
 import org.springframework.data.mapping.model.MappingException;
 import org.springframework.data.mapping.model.MappingInstantiationException;
 import org.springframework.data.mongodb.core.DBObjectTestUtils;
 import org.springframework.data.mongodb.core.convert.DBObjectAccessorUnitTests.NestedType;
 import org.springframework.data.mongodb.core.convert.DBObjectAccessorUnitTests.ProjectingType;
+import org.springframework.data.mongodb.core.convert.MappingMongoConverterUnitTests.ClassWithMapUsingEnumAsKey.FooBarEnum;
+import org.springframework.data.mongodb.core.geo.Sphere;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.data.mongodb.core.mapping.PersonPojoStringId;
+import org.springframework.data.mongodb.core.mapping.TextScore;
 import org.springframework.data.util.ClassTypeInformation;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.mongodb.BasicDBList;
 import com.mongodb.BasicDBObject;
-import com.mongodb.DB;
+import com.mongodb.BasicDBObjectBuilder;
 import com.mongodb.DBObject;
 import com.mongodb.DBRef;
 import com.mongodb.util.JSON;
@@ -86,6 +109,8 @@ public class MappingMongoConverterUnitTests {
 	MongoMappingContext mappingContext;
 	@Mock ApplicationContext context;
 	@Mock DbRefResolver resolver;
+
+	public @Rule ExpectedException exception = ExpectedException.none();
 
 	@Before
 	public void setUp() {
@@ -1066,7 +1091,7 @@ public class MappingMongoConverterUnitTests {
 	@Test
 	public void readsPlainDBRefObject() {
 
-		DBRef dbRef = new DBRef(mock(DB.class), "foo", 2);
+		DBRef dbRef = new DBRef("foo", 2);
 		DBObject dbObject = new BasicDBObject("ref", dbRef);
 
 		DBRefWrapper result = converter.read(DBRefWrapper.class, dbObject);
@@ -1079,7 +1104,7 @@ public class MappingMongoConverterUnitTests {
 	@Test
 	public void readsCollectionOfDBRefs() {
 
-		DBRef dbRef = new DBRef(mock(DB.class), "foo", 2);
+		DBRef dbRef = new DBRef("foo", 2);
 		BasicDBList refs = new BasicDBList();
 		refs.add(dbRef);
 
@@ -1113,8 +1138,8 @@ public class MappingMongoConverterUnitTests {
 	@SuppressWarnings({ "rawtypes", "unchecked" })
 	public void resolvesDBRefMapValue() {
 
+		when(resolver.fetch(Mockito.any(DBRef.class))).thenReturn(new BasicDBObject());
 		DBRef dbRef = mock(DBRef.class);
-		when(dbRef.fetch()).thenReturn(new BasicDBObject());
 
 		BasicDBObject refMap = new BasicDBObject("foo", dbRef);
 		DBObject dbObject = new BasicDBObject("personMap", refMap);
@@ -1241,8 +1266,7 @@ public class MappingMongoConverterUnitTests {
 	@Test
 	public void eagerlyReturnsDBRefObjectIfTargetAlreadyIsOne() {
 
-		DB db = mock(DB.class);
-		DBRef dbRef = new DBRef(db, "collection", "id");
+		DBRef dbRef = new DBRef("collection", "id");
 
 		MongoPersistentProperty property = mock(MongoPersistentProperty.class);
 
@@ -1387,6 +1411,7 @@ public class MappingMongoConverterUnitTests {
 
 	/**
 	 * @see DATAMONGO-812
+	 * @see DATAMONGO-893
 	 */
 	@Test
 	public void convertsListToBasicDBListAndRetainsTypeInformationForComplexObjects() {
@@ -1396,7 +1421,7 @@ public class MappingMongoConverterUnitTests {
 		address.street = "Foo";
 
 		Object result = converter.convertToMongoType(Collections.singletonList(address),
-				ClassTypeInformation.from(Address.class));
+				ClassTypeInformation.from(InterfaceType.class));
 
 		assertThat(result, is(instanceOf(BasicDBList.class)));
 
@@ -1485,6 +1510,562 @@ public class MappingMongoConverterUnitTests {
 		assertThat(result.enumMap.get(SampleEnum.FIRST), is("Dave"));
 	}
 
+	/**
+	 * @see DATAMONGO-887
+	 */
+	@Test
+	public void readsTreeMapCorrectly() {
+
+		DBObject person = new BasicDBObject("foo", "Dave");
+		DBObject treeMapOfPerson = new BasicDBObject("key", person);
+		DBObject document = new BasicDBObject("treeMapOfPersons", treeMapOfPerson);
+
+		ClassWithMapProperty result = converter.read(ClassWithMapProperty.class, document);
+
+		assertThat(result.treeMapOfPersons, is(notNullValue()));
+		assertThat(result.treeMapOfPersons.get("key"), is(notNullValue()));
+		assertThat(result.treeMapOfPersons.get("key").firstname, is("Dave"));
+	}
+
+	/**
+	 * @see DATAMONGO-887
+	 */
+	@Test
+	public void writesTreeMapCorrectly() {
+
+		Person person = new Person();
+		person.firstname = "Dave";
+
+		ClassWithMapProperty source = new ClassWithMapProperty();
+		source.treeMapOfPersons = new TreeMap<String, Person>();
+		source.treeMapOfPersons.put("key", person);
+
+		DBObject result = new BasicDBObject();
+
+		converter.write(source, result);
+
+		DBObject map = getAsDBObject(result, "treeMapOfPersons");
+		DBObject entry = getAsDBObject(map, "key");
+		assertThat(entry.get("foo"), is((Object) "Dave"));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldWriteEntityWithGeoBoxCorrectly() {
+
+		ClassWithGeoBox object = new ClassWithGeoBox();
+		object.box = new Box(new Point(1, 2), new Point(3, 4));
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		assertThat(dbo, is(notNullValue()));
+		assertThat(dbo.get("box"), is(instanceOf(DBObject.class)));
+		assertThat(dbo.get("box"), is((Object) new BasicDBObject().append("first", toDbObject(object.box.getFirst()))
+				.append("second", toDbObject(object.box.getSecond()))));
+	}
+
+	private static DBObject toDbObject(Point point) {
+		return new BasicDBObject("x", point.getX()).append("y", point.getY());
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldReadEntityWithGeoBoxCorrectly() {
+
+		ClassWithGeoBox object = new ClassWithGeoBox();
+		object.box = new Box(new Point(1, 2), new Point(3, 4));
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		ClassWithGeoBox result = converter.read(ClassWithGeoBox.class, dbo);
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.box, is(object.box));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldWriteEntityWithGeoPolygonCorrectly() {
+
+		ClassWithGeoPolygon object = new ClassWithGeoPolygon();
+		object.polygon = new Polygon(new Point(1, 2), new Point(3, 4), new Point(4, 5));
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		assertThat(dbo, is(notNullValue()));
+
+		assertThat(dbo.get("polygon"), is(instanceOf(DBObject.class)));
+		DBObject polygonDbo = (DBObject) dbo.get("polygon");
+
+		@SuppressWarnings("unchecked")
+		List<DBObject> points = (List<DBObject>) polygonDbo.get("points");
+
+		assertThat(points, hasSize(3));
+		assertThat(points, Matchers.<DBObject> hasItems(toDbObject(object.polygon.getPoints().get(0)),
+				toDbObject(object.polygon.getPoints().get(1)), toDbObject(object.polygon.getPoints().get(2))));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldReadEntityWithGeoPolygonCorrectly() {
+
+		ClassWithGeoPolygon object = new ClassWithGeoPolygon();
+		object.polygon = new Polygon(new Point(1, 2), new Point(3, 4), new Point(4, 5));
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		ClassWithGeoPolygon result = converter.read(ClassWithGeoPolygon.class, dbo);
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.polygon, is(object.polygon));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldWriteEntityWithGeoCircleCorrectly() {
+
+		ClassWithGeoCircle object = new ClassWithGeoCircle();
+		Circle circle = new Circle(new Point(1, 2), 3);
+		Distance radius = circle.getRadius();
+		object.circle = circle;
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		assertThat(dbo, is(notNullValue()));
+		assertThat(dbo.get("circle"), is(instanceOf(DBObject.class)));
+		assertThat(
+				dbo.get("circle"),
+				is((Object) new BasicDBObject("center", new BasicDBObject("x", circle.getCenter().getX()).append("y", circle
+						.getCenter().getY())).append("radius", radius.getNormalizedValue()).append("metric",
+						radius.getMetric().toString())));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldReadEntityWithGeoCircleCorrectly() {
+
+		ClassWithGeoCircle object = new ClassWithGeoCircle();
+		object.circle = new Circle(new Point(1, 2), 3);
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		ClassWithGeoCircle result = converter.read(ClassWithGeoCircle.class, dbo);
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.circle, is(result.circle));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldWriteEntityWithGeoSphereCorrectly() {
+
+		ClassWithGeoSphere object = new ClassWithGeoSphere();
+		Sphere sphere = new Sphere(new Point(1, 2), 3);
+		Distance radius = sphere.getRadius();
+		object.sphere = sphere;
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		assertThat(dbo, is(notNullValue()));
+		assertThat(dbo.get("sphere"), is(instanceOf(DBObject.class)));
+		assertThat(
+				dbo.get("sphere"),
+				is((Object) new BasicDBObject("center", new BasicDBObject("x", sphere.getCenter().getX()).append("y", sphere
+						.getCenter().getY())).append("radius", radius.getNormalizedValue()).append("metric",
+						radius.getMetric().toString())));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldWriteEntityWithGeoSphereWithMetricDistanceCorrectly() {
+
+		ClassWithGeoSphere object = new ClassWithGeoSphere();
+		Sphere sphere = new Sphere(new Point(1, 2), new Distance(3, Metrics.KILOMETERS));
+		Distance radius = sphere.getRadius();
+		object.sphere = sphere;
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		assertThat(dbo, is(notNullValue()));
+		assertThat(dbo.get("sphere"), is(instanceOf(DBObject.class)));
+		assertThat(
+				dbo.get("sphere"),
+				is((Object) new BasicDBObject("center", new BasicDBObject("x", sphere.getCenter().getX()).append("y", sphere
+						.getCenter().getY())).append("radius", radius.getNormalizedValue()).append("metric",
+						radius.getMetric().toString())));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldReadEntityWithGeoSphereCorrectly() {
+
+		ClassWithGeoSphere object = new ClassWithGeoSphere();
+		object.sphere = new Sphere(new Point(1, 2), 3);
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		ClassWithGeoSphere result = converter.read(ClassWithGeoSphere.class, dbo);
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.sphere, is(object.sphere));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	public void shouldWriteEntityWithGeoShapeCorrectly() {
+
+		ClassWithGeoShape object = new ClassWithGeoShape();
+		Sphere sphere = new Sphere(new Point(1, 2), 3);
+		Distance radius = sphere.getRadius();
+		object.shape = sphere;
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		assertThat(dbo, is(notNullValue()));
+		assertThat(dbo.get("shape"), is(instanceOf(DBObject.class)));
+		assertThat(
+				dbo.get("shape"),
+				is((Object) new BasicDBObject("center", new BasicDBObject("x", sphere.getCenter().getX()).append("y", sphere
+						.getCenter().getY())).append("radius", radius.getNormalizedValue()).append("metric",
+						radius.getMetric().toString())));
+	}
+
+	/**
+	 * @DATAMONGO-858
+	 */
+	@Test
+	@Ignore
+	public void shouldReadEntityWithGeoShapeCorrectly() {
+
+		ClassWithGeoShape object = new ClassWithGeoShape();
+		Sphere sphere = new Sphere(new Point(1, 2), 3);
+		object.shape = sphere;
+
+		DBObject dbo = new BasicDBObject();
+		converter.write(object, dbo);
+
+		ClassWithGeoShape result = converter.read(ClassWithGeoShape.class, dbo);
+
+		assertThat(result, is(notNullValue()));
+		assertThat(result.shape, is((Shape) sphere));
+	}
+
+	/**
+	 * @see DATAMONGO-976
+	 */
+	@Test
+	public void shouldIgnoreTextScorePropertyWhenWriting() {
+
+		ClassWithTextScoreProperty source = new ClassWithTextScoreProperty();
+		source.score = Float.MAX_VALUE;
+
+		BasicDBObject dbo = new BasicDBObject();
+		converter.write(source, dbo);
+
+		assertThat(dbo.get("score"), nullValue());
+	}
+
+	/**
+	 * @see DATAMONGO-976
+	 */
+	@Test
+	public void shouldIncludeTextScorePropertyWhenReading() {
+
+		ClassWithTextScoreProperty entity = converter
+				.read(ClassWithTextScoreProperty.class, new BasicDBObject("score", 5F));
+		assertThat(entity.score, equalTo(5F));
+	}
+
+	/**
+	 * @see DATAMONGO-1001
+	 */
+	@Test
+	public void shouldWriteCglibProxiedClassTypeInformationCorrectly() {
+
+		ProxyFactory factory = new ProxyFactory();
+		factory.setTargetClass(GenericType.class);
+		factory.setProxyTargetClass(true);
+
+		GenericType<?> proxied = (GenericType<?>) factory.getProxy();
+		BasicDBObject dbo = new BasicDBObject();
+		converter.write(proxied, dbo);
+
+		assertThat(dbo.get("_class"), is((Object) GenericType.class.getName()));
+	}
+
+	/**
+	 * @see DATAMONGO-1001
+	 */
+	@Test
+	public void shouldUseTargetObjectOfLazyLoadingProxyWhenWriting() {
+
+		LazyLoadingProxy mock = mock(LazyLoadingProxy.class);
+
+		BasicDBObject dbo = new BasicDBObject();
+		converter.write(mock, dbo);
+
+		verify(mock, times(1)).getTarget();
+	}
+
+	/**
+	 * @see DATAMONGO-1034
+	 */
+	@Test
+	public void rejectsBasicDbListToBeConvertedIntoComplexType() {
+
+		BasicDBList inner = new BasicDBList();
+		inner.add("key");
+		inner.add("value");
+
+		BasicDBList outer = new BasicDBList();
+		outer.add(inner);
+		outer.add(inner);
+
+		BasicDBObject source = new BasicDBObject("attributes", outer);
+
+		exception.expect(MappingException.class);
+		exception.expectMessage(Item.class.getName());
+		exception.expectMessage(BasicDBList.class.getName());
+
+		converter.read(Item.class, source);
+	}
+
+	/**
+	 * @see DATAMONGO-1058
+	 */
+	@Test
+	public void readShouldRespectExplicitFieldNameForDbRef() {
+
+		BasicDBObject source = new BasicDBObject();
+		source.append("explict-name-for-db-ref", new DBRef("foo", "1"));
+
+		converter.read(ClassWithExplicitlyNamedDBRefProperty.class, source);
+
+		verify(resolver, times(1)).resolveDbRef(Mockito.any(MongoPersistentProperty.class), Mockito.any(DBRef.class),
+				Mockito.any(DbRefResolverCallback.class), Mockito.any(DbRefProxyHandler.class));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void writeShouldUseExplicitFieldnameForIdPropertyWhenAnnotated() {
+
+		RootForClassWithExplicitlyRenamedIdField source = new RootForClassWithExplicitlyRenamedIdField();
+		source.id = "rootId";
+		source.nested = new ClassWithExplicitlyRenamedField();
+		source.nested.id = "nestedId";
+
+		DBObject sink = new BasicDBObject();
+		converter.write(source, sink);
+
+		assertThat((String) sink.get("_id"), is("rootId"));
+		assertThat((DBObject) sink.get("nested"), is(new BasicDBObjectBuilder().add("id", "nestedId").get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void readShouldUseExplicitFieldnameForIdPropertyWhenAnnotated() {
+
+		DBObject source = new BasicDBObjectBuilder().add("_id", "rootId")
+				.add("nested", new BasicDBObject("id", "nestedId")).get();
+
+		RootForClassWithExplicitlyRenamedIdField sink = converter.read(RootForClassWithExplicitlyRenamedIdField.class,
+				source);
+
+		assertThat(sink.id, is("rootId"));
+		assertThat(sink.nested, notNullValue());
+		assertThat(sink.nested.id, is("nestedId"));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void namedIdFieldShouldExtractValueFromUnderscoreIdField() {
+
+		DBObject dbo = new BasicDBObjectBuilder().add("_id", "A").add("id", "B").get();
+
+		ClassWithNamedIdField withNamedIdField = converter.read(ClassWithNamedIdField.class, dbo);
+
+		assertThat(withNamedIdField.id, is("A"));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void explicitlyRenamedIfFieldShouldExtractValueFromIdField() {
+
+		DBObject dbo = new BasicDBObjectBuilder().add("_id", "A").add("id", "B").get();
+
+		ClassWithExplicitlyRenamedField withExplicitlyRenamedField = converter.read(ClassWithExplicitlyRenamedField.class,
+				dbo);
+
+		assertThat(withExplicitlyRenamedField.id, is("B"));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void annotatedIdFieldShouldExtractValueFromUnderscoreIdField() {
+
+		DBObject dbo = new BasicDBObjectBuilder().add("_id", "A").add("id", "B").get();
+
+		ClassWithAnnotatedIdField withAnnotatedIdField = converter.read(ClassWithAnnotatedIdField.class, dbo);
+
+		assertThat(withAnnotatedIdField.key, is("A"));
+	}
+
+	/**
+	 * @see DATAMONGO-1102
+	 */
+	@Test
+	public void convertsJava8DateTimeTypesToDateAndBack() {
+
+		TypeWithLocalDateTime source = new TypeWithLocalDateTime();
+		LocalDateTime reference = source.date;
+		BasicDBObject result = new BasicDBObject();
+
+		converter.write(source, result);
+
+		assertThat(result.get("date"), is(instanceOf(Date.class)));
+		assertThat(converter.read(TypeWithLocalDateTime.class, result).date, is(reference));
+	}
+
+	/**
+	 * @see DATAMONGO-1128
+	 */
+	@Test
+	public void writesOptionalsCorrectly() {
+
+		TypeWithOptional type = new TypeWithOptional();
+		type.localDateTime = Optional.of(LocalDateTime.now());
+
+		DBObject result = new BasicDBObject();
+
+		converter.write(type, result);
+
+		assertThat(getAsDBObject(result, "string"), is((DBObject) new BasicDBObject()));
+
+		DBObject localDateTime = getAsDBObject(result, "localDateTime");
+		assertThat(localDateTime.get("value"), is(instanceOf(Date.class)));
+	}
+
+	/**
+	 * @see DATAMONGO-1128
+	 */
+	@Test
+	public void readsOptionalsCorrectly() {
+
+		LocalDateTime now = LocalDateTime.now();
+		Date reference = Date.from(now.atZone(systemDefault()).toInstant());
+
+		BasicDBObject optionalOfLocalDateTime = new BasicDBObject("value", reference);
+		DBObject result = new BasicDBObject("localDateTime", optionalOfLocalDateTime);
+
+		TypeWithOptional read = converter.read(TypeWithOptional.class, result);
+
+		assertThat(read.string, is(Optional.<String> empty()));
+		assertThat(read.localDateTime, is(Optional.of(now)));
+	}
+
+	/**
+	 * @see DATAMONGO-1118
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void convertsMapKeyUsingCustomConverterForAndBackwards() {
+
+		MappingMongoConverter converter = new MappingMongoConverter(resolver, mappingContext);
+		converter.setCustomConversions(new CustomConversions(Arrays.asList(new FooBarEnumToStringConverter(),
+				new StringToFooNumConverter())));
+		converter.afterPropertiesSet();
+
+		ClassWithMapUsingEnumAsKey source = new ClassWithMapUsingEnumAsKey();
+		source.map = new HashMap<FooBarEnum, String>();
+		source.map.put(FooBarEnum.FOO, "wohoo");
+
+		DBObject target = new BasicDBObject();
+		converter.write(source, target);
+
+		assertThat(converter.read(ClassWithMapUsingEnumAsKey.class, target).map, is(source.map));
+	}
+
+	/**
+	 * @see DATAMONGO-1118
+	 */
+	@Test
+	public void writesMapKeyUsingCustomConverter() {
+
+		MappingMongoConverter converter = new MappingMongoConverter(resolver, mappingContext);
+		converter.setCustomConversions(new CustomConversions(Arrays.asList(new FooBarEnumToStringConverter())));
+		converter.afterPropertiesSet();
+
+		ClassWithMapUsingEnumAsKey source = new ClassWithMapUsingEnumAsKey();
+		source.map = new HashMap<FooBarEnum, String>();
+		source.map.put(FooBarEnum.FOO, "spring");
+		source.map.put(FooBarEnum.BAR, "data");
+
+		DBObject target = new BasicDBObject();
+		converter.write(source, target);
+
+		DBObject map = DBObjectTestUtils.getAsDBObject(target, "map");
+
+		assertThat(map.containsField("foo-enum-value"), is(true));
+		assertThat(map.containsField("bar-enum-value"), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-1118
+	 */
+	@Test
+	public void readsMapKeyUsingCustomConverter() {
+
+		MappingMongoConverter converter = new MappingMongoConverter(resolver, mappingContext);
+		converter.setCustomConversions(new CustomConversions(Arrays.asList(new StringToFooNumConverter())));
+		converter.afterPropertiesSet();
+
+		DBObject source = new BasicDBObject("map", new BasicDBObject("foo-enum-value", "spring"));
+
+		ClassWithMapUsingEnumAsKey target = converter.read(ClassWithMapUsingEnumAsKey.class, source);
+
+		assertThat(target.map.get(FooBarEnum.FOO), is("spring"));
+	}
+
 	static class GenericType<T> {
 		T content;
 	}
@@ -1512,7 +2093,11 @@ public class MappingMongoConverterUnitTests {
 		abstract void method();
 	}
 
-	static class Address {
+	static interface InterfaceType {
+
+	}
+
+	static class Address implements InterfaceType {
 		String street;
 		String city;
 	}
@@ -1552,6 +2137,7 @@ public class MappingMongoConverterUnitTests {
 		Map<String, Object> mapOfObjects;
 		Map<String, String[]> mapOfStrings;
 		Map<String, Person> mapOfPersons;
+		TreeMap<String, Person> treeMapOfPersons;
 	}
 
 	static class ClassWithNestedMaps {
@@ -1697,6 +2283,133 @@ public class MappingMongoConverterUnitTests {
 
 		public PrimitiveContainer property() {
 			return m_property;
+		}
+	}
+
+	class ClassWithGeoBox {
+
+		Box box;
+	}
+
+	class ClassWithGeoCircle {
+
+		Circle circle;
+	}
+
+	class ClassWithGeoSphere {
+
+		Sphere sphere;
+	}
+
+	class ClassWithGeoPolygon {
+
+		Polygon polygon;
+	}
+
+	class ClassWithGeoShape {
+
+		Shape shape;
+	}
+
+	class ClassWithTextScoreProperty {
+
+		@TextScore Float score;
+	}
+
+	class ClassWithExplicitlyNamedDBRefProperty {
+
+		@Field("explict-name-for-db-ref")//
+		@org.springframework.data.mongodb.core.mapping.DBRef//
+		ClassWithIntId dbRefProperty;
+
+		public ClassWithIntId getDbRefProperty() {
+			return dbRefProperty;
+		}
+	}
+
+	static class RootForClassWithExplicitlyRenamedIdField {
+
+		@Id String id;
+		ClassWithExplicitlyRenamedField nested;
+	}
+
+	static class ClassWithExplicitlyRenamedField {
+
+		@Field("id") String id;
+	}
+
+	static class RootForClassWithNamedIdField {
+
+		String id;
+		ClassWithNamedIdField nested;
+	}
+
+	static class ClassWithNamedIdField {
+
+		String id;
+	}
+
+	static class ClassWithAnnotatedIdField {
+
+		@Id String key;
+	}
+
+	static class TypeWithLocalDateTime {
+
+		LocalDateTime date;
+
+		TypeWithLocalDateTime() {
+			this.date = LocalDateTime.now();
+		}
+	}
+
+	static class TypeWithOptional {
+
+		Optional<String> string = Optional.empty();
+		Optional<LocalDateTime> localDateTime = Optional.empty();
+	}
+
+	static class ClassWithMapUsingEnumAsKey {
+
+		static enum FooBarEnum {
+			FOO, BAR;
+		}
+
+		Map<FooBarEnum, String> map;
+	}
+
+	@WritingConverter
+	static class FooBarEnumToStringConverter implements Converter<FooBarEnum, String> {
+
+		@Override
+		public String convert(FooBarEnum source) {
+
+			if (source == null) {
+				return null;
+			}
+
+			return FooBarEnum.FOO.equals(source) ? "foo-enum-value" : "bar-enum-value";
+		}
+	}
+
+	@ReadingConverter
+	static class StringToFooNumConverter implements Converter<String, FooBarEnum> {
+
+		@Override
+		public FooBarEnum convert(String source) {
+
+			if (source == null) {
+				return null;
+			}
+
+			if (source.equals("foo-enum-value")) {
+				return FooBarEnum.FOO;
+			}
+			if (source.equals("bar-enum-value")) {
+				return FooBarEnum.BAR;
+			}
+
+			throw new ConversionNotSupportedException(source, String.class, null);
 		}
 	}
 }

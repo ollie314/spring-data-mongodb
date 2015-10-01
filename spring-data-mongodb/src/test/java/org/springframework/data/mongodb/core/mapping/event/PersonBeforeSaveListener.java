@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 by the original author(s).
+ * Copyright 2011-2015 by the original author(s).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,17 +16,21 @@
 package org.springframework.data.mongodb.core.mapping.event;
 
 import java.util.ArrayList;
+import java.util.List;
 
 import org.springframework.context.ApplicationEvent;
-import org.springframework.context.ApplicationListener;
 import org.springframework.data.mongodb.core.mapping.PersonPojoStringId;
 
-public class PersonBeforeSaveListener implements ApplicationListener<BeforeSaveEvent<PersonPojoStringId>> {
+public class PersonBeforeSaveListener extends AbstractMongoEventListener<PersonPojoStringId> {
 
-	public final ArrayList<ApplicationEvent> seenEvents = new ArrayList<ApplicationEvent>();
+	public final List<ApplicationEvent> seenEvents = new ArrayList<ApplicationEvent>();
 
-	public void onApplicationEvent(BeforeSaveEvent<PersonPojoStringId> event) {
-		this.seenEvents.add(event);
+	/* 
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.event.AbstractMongoEventListener#onBeforeSave(java.lang.Object, com.mongodb.DBObject)
+	 */
+	@Override
+	public void onBeforeSave(BeforeSaveEvent<PersonPojoStringId> event) {
+		seenEvents.add(event);
 	}
-
 }

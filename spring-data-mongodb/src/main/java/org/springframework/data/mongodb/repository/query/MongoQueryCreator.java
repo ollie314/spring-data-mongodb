@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2013 the original author or authors.
+ * Copyright 2010-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,15 +20,21 @@ import static org.springframework.data.mongodb.core.query.Criteria.*;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Iterator;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Range;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Metrics;
+import org.springframework.data.geo.Point;
+import org.springframework.data.geo.Shape;
+import org.springframework.data.mapping.PropertyPath;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mapping.context.PersistentPropertyPath;
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.Point;
-import org.springframework.data.mongodb.core.geo.Shape;
+import org.springframework.data.mongodb.core.index.GeoSpatialIndexType;
+import org.springframework.data.mongodb.core.index.GeoSpatialIndexed;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.CriteriaDefinition;
@@ -40,16 +46,19 @@ import org.springframework.data.repository.query.parser.Part.IgnoreCaseType;
 import org.springframework.data.repository.query.parser.Part.Type;
 import org.springframework.data.repository.query.parser.PartTree;
 import org.springframework.util.Assert;
+import org.springframework.util.ObjectUtils;
 
 /**
  * Custom query creator to create Mongo criterias.
  * 
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 
 	private static final Logger LOG = LoggerFactory.getLogger(MongoQueryCreator.class);
+	private static final Pattern PUNCTATION_PATTERN = Pattern.compile("\\p{Punct}");
 	private final MongoParameterAccessor accessor;
 	private final boolean isGeoNearQuery;
 
@@ -102,9 +111,7 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 
 		PersistentPropertyPath<MongoPersistentProperty> path = context.getPersistentPropertyPath(part.getProperty());
 		MongoPersistentProperty property = path.getLeafProperty();
-		Criteria criteria = from(part, property,
-				where(path.toDotPath(MongoPersistentProperty.PropertyToFieldNameConverter.INSTANCE)),
-				(PotentiallyConvertingIterator) iterator);
+		Criteria criteria = from(part, property, where(path.toDotPath()), (PotentiallyConvertingIterator) iterator);
 
 		return criteria;
 	}
@@ -123,9 +130,7 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 		PersistentPropertyPath<MongoPersistentProperty> path = context.getPersistentPropertyPath(part.getProperty());
 		MongoPersistentProperty property = path.getLeafProperty();
 
-		return from(part, property,
-				base.and(path.toDotPath(MongoPersistentProperty.PropertyToFieldNameConverter.INSTANCE)),
-				(PotentiallyConvertingIterator) iterator);
+		return from(part, property, base.and(path.toDotPath()), (PotentiallyConvertingIterator) iterator);
 	}
 
 	/*
@@ -146,11 +151,7 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	@Override
 	protected Query complete(Criteria criteria, Sort sort) {
 
-		if (criteria == null) {
-			return null;
-		}
-
-		Query query = new Query(criteria).with(sort);
+		Query query = (criteria == null ? new Query() : new Query(criteria)).with(sort);
 
 		if (LOG.isDebugEnabled()) {
 			LOG.debug("Created query " + query);
@@ -198,7 +199,9 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 			case STARTING_WITH:
 			case ENDING_WITH:
 			case CONTAINING:
-				return addAppropriateLikeRegexTo(criteria, part, parameters.next().toString());
+				return createContainingCriteria(part, property, criteria, parameters);
+			case NOT_CONTAINING:
+				return createContainingCriteria(part, property, criteria, parameters).not();
 			case REGEX:
 				return criteria.regex(parameters.next().toString());
 			case EXISTS:
@@ -209,19 +212,27 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 				return criteria.is(false);
 			case NEAR:
 
-				Distance distance = accessor.getMaxDistance();
+				Range<Distance> range = accessor.getDistanceRange();
+				Distance distance = range.getUpperBound();
+				Distance minDistance = range.getLowerBound();
+
 				Point point = accessor.getGeoNearLocation();
 				point = point == null ? nextAs(parameters, Point.class) : point;
 
+				boolean isSpherical = isSpherical(property);
+
 				if (distance == null) {
-					return criteria.near(point);
+					return isSpherical ? criteria.nearSphere(point) : criteria.near(point);
 				} else {
-					if (distance.getMetric() != null) {
+					if (isSpherical || !Metrics.NEUTRAL.equals(distance.getMetric())) {
 						criteria.nearSphere(point);
 					} else {
 						criteria.near(point);
 					}
 					criteria.maxDistance(distance.getNormalizedValue());
+					if (minDistance != null) {
+						criteria.minDistance(minDistance.getNormalizedValue());
+					}
 				}
 				return criteria;
 			case WITHIN:
@@ -269,19 +280,23 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	private Criteria createLikeRegexCriteriaOrThrow(Part part, MongoPersistentProperty property, Criteria criteria,
 			PotentiallyConvertingIterator parameters, boolean shouldNegateExpression) {
 
+		PropertyPath path = part.getProperty().getLeafProperty();
+
 		switch (part.shouldIgnoreCase()) {
 
 			case ALWAYS:
-				if (part.getProperty().getType() != String.class) {
-					throw new IllegalArgumentException(String.format("part %s must be of type String but was %s",
-							part.getProperty(), part.getType()));
+				if (path.getType() != String.class) {
+					throw new IllegalArgumentException(
+							String.format("Part %s must be of type String but was %s", path, path.getType()));
 				}
 				// fall-through
 
 			case WHEN_POSSIBLE:
+
 				if (shouldNegateExpression) {
 					criteria = criteria.not();
 				}
+
 				return addAppropriateLikeRegexTo(criteria, part, parameters.nextConverted(property).toString());
 
 			case NEVER:
@@ -290,6 +305,27 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 
 		throw new IllegalArgumentException(String.format("part.shouldCaseIgnore must be one of %s, but was %s",
 				Arrays.asList(IgnoreCaseType.ALWAYS, IgnoreCaseType.WHEN_POSSIBLE), part.shouldIgnoreCase()));
+	}
+
+	/**
+	 * If the target property of the comparison is of type String, then the operator checks for match using regular
+	 * expression. If the target property of the comparison is a {@link Collection} then the operator evaluates to true if
+	 * it finds an exact match within any member of the {@link Collection}.
+	 * 
+	 * @param part
+	 * @param property
+	 * @param criteria
+	 * @param parameters
+	 * @return
+	 */
+	private Criteria createContainingCriteria(Part part, MongoPersistentProperty property, Criteria criteria,
+			PotentiallyConvertingIterator parameters) {
+
+		if (property.isCollectionLike()) {
+			return criteria.in(nextAsArray(parameters, property));
+		}
+
+		return addAppropriateLikeRegexTo(criteria, part, parameters.next().toString());
 	}
 
 	/**
@@ -337,8 +373,8 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 			return (T) parameter;
 		}
 
-		throw new IllegalArgumentException(String.format("Expected parameter type of %s but got %s!", type,
-				parameter.getClass()));
+		throw new IllegalArgumentException(
+				String.format("Expected parameter type of %s but got %s!", type, parameter.getClass()));
 	}
 
 	private Object[] nextAsArray(PotentiallyConvertingIterator iterator, MongoPersistentProperty property) {
@@ -356,23 +392,64 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	private String toLikeRegex(String source, Part part) {
 
 		Type type = part.getType();
+		String regex = prepareAndEscapeStringBeforeApplyingLikeRegex(source, part);
 
 		switch (type) {
 			case STARTING_WITH:
-				source = "^" + source;
+				regex = "^" + regex;
 				break;
 			case ENDING_WITH:
-				source = source + "$";
+				regex = regex + "$";
 				break;
 			case CONTAINING:
-				source = "*" + source + "*";
+			case NOT_CONTAINING:
+				regex = ".*" + regex + ".*";
 				break;
 			case SIMPLE_PROPERTY:
 			case NEGATING_SIMPLE_PROPERTY:
-				source = "^" + source + "$";
+				regex = "^" + regex + "$";
 			default:
 		}
 
-		return source.replaceAll("\\*", ".*");
+		return regex;
+	}
+
+	private String prepareAndEscapeStringBeforeApplyingLikeRegex(String source, Part qpart) {
+
+		if (!ObjectUtils.nullSafeEquals(Type.LIKE, qpart.getType())) {
+			return PUNCTATION_PATTERN.matcher(source).find() ? Pattern.quote(source) : source;
+		}
+
+		if (source.equals("*")) {
+			return ".*";
+		}
+
+		StringBuilder sb = new StringBuilder();
+
+		boolean leadingWildcard = source.startsWith("*");
+		boolean trailingWildcard = source.endsWith("*");
+
+		String valueToUse = source.substring(leadingWildcard ? 1 : 0,
+				trailingWildcard ? source.length() - 1 : source.length());
+
+		if (PUNCTATION_PATTERN.matcher(valueToUse).find()) {
+			valueToUse = Pattern.quote(valueToUse);
+		}
+
+		if (leadingWildcard) {
+			sb.append(".*");
+		}
+		sb.append(valueToUse);
+		if (trailingWildcard) {
+			sb.append(".*");
+		}
+
+		return sb.toString();
+	}
+
+	private boolean isSpherical(MongoPersistentProperty property) {
+
+		GeoSpatialIndexed index = property.findAnnotation(GeoSpatialIndexed.class);
+		return index != null && index.type().equals(GeoSpatialIndexType.GEO_2DSPHERE);
 	}
 }

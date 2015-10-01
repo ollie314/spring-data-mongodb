@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,12 +19,11 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 
+import org.springframework.data.geo.GeoResults;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.aggregation.TypedAggregation;
 import org.springframework.data.mongodb.core.convert.MongoConverter;
-import org.springframework.data.mongodb.core.geo.GeoResult;
-import org.springframework.data.mongodb.core.geo.GeoResults;
 import org.springframework.data.mongodb.core.mapreduce.GroupBy;
 import org.springframework.data.mongodb.core.mapreduce.GroupByResults;
 import org.springframework.data.mongodb.core.mapreduce.MapReduceOptions;
@@ -34,10 +33,14 @@ import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
+import org.springframework.data.util.CloseableIterator;
 
 import com.mongodb.CommandResult;
+import com.mongodb.Cursor;
+import com.mongodb.DB;
 import com.mongodb.DBCollection;
 import com.mongodb.DBObject;
+import com.mongodb.ReadPreference;
 import com.mongodb.WriteResult;
 
 /**
@@ -50,6 +53,8 @@ import com.mongodb.WriteResult;
  * @author Oliver Gierke
  * @author Tobias Trelle
  * @author Chuong Ngo
+ * @author Christoph Strobl
+ * @author Thomas Darimont
  */
 public interface MongoOperations {
 
@@ -84,8 +89,22 @@ public interface MongoOperations {
 	 * 
 	 * @param command a MongoDB command
 	 * @param options query options to use
+	 * @deprecated since 1.7. Please use {@link #executeCommand(DBObject, ReadPreference)}, as the MongoDB Java driver
+	 *             version 3 no longer supports this operation.
 	 */
+	@Deprecated
 	CommandResult executeCommand(DBObject command, int options);
+
+	/**
+	 * Execute a MongoDB command. Any errors that result from executing this command will be converted into Spring's data
+	 * access exception hierarchy.
+	 * 
+	 * @param command a MongoDB command, must not be {@literal null}.
+	 * @param readPreference read preferences to use, can be {@literal null}.
+	 * @return
+	 * @since 1.7
+	 */
+	CommandResult executeCommand(DBObject command, ReadPreference readPreference);
 
 	/**
 	 * Execute a MongoDB query and iterate over the query results on a per-document basis with a DocumentCallbackHandler.
@@ -142,8 +161,25 @@ public interface MongoOperations {
 	 * @param <T> return type
 	 * @param action callback that specified the MongoDB actions to perform on the DB instance
 	 * @return a result object returned by the action or <tt>null</tt>
+	 * @deprecated since 1.7 as the MongoDB Java driver version 3 does not longer support request boundaries via
+	 *             {@link DB#requestStart()} and {@link DB#requestDone()}.
 	 */
+	@Deprecated
 	<T> T executeInSession(DbCallback<T> action);
+
+	/**
+	 * Executes the given {@link Query} on the entity collection of the specified {@code entityType} backed by a Mongo DB
+	 * {@link Cursor}.
+	 * <p>
+	 * Returns a {@link CloseableIterator} that wraps the a Mongo DB {@link Cursor} that needs to be closed.
+	 * 
+	 * @param <T> element return type
+	 * @param query
+	 * @param entityType
+	 * @return
+	 * @since 1.7
+	 */
+	<T> CloseableIterator<T> stream(Query query, Class<T> entityType);
 
 	/**
 	 * Create an uncapped collection with a name based on the provided entity class.
@@ -247,6 +283,14 @@ public interface MongoOperations {
 	 * @return index operations on the named collection associated with the given entity class
 	 */
 	IndexOperations indexOps(Class<?> entityClass);
+
+	/**
+	 * Returns the {@link ScriptOperations} that can be performed on {@link com.mongodb.DB} level.
+	 * 
+	 * @return
+	 * @since 1.7
+	 */
+	ScriptOperations scriptOps();
 
 	/**
 	 * Query for a list of objects of type T from the collection used by the entity class.
@@ -413,8 +457,10 @@ public interface MongoOperations {
 			MapReduceOptions mapReduceOptions, Class<T> entityClass);
 
 	/**
-	 * Returns {@link GeoResult} for all entities matching the given {@link NearQuery}. Will consider entity mapping
-	 * information to determine the collection the query is ran against.
+	 * Returns {@link GeoResults} for all entities matching the given {@link NearQuery}. Will consider entity mapping
+	 * information to determine the collection the query is ran against. Note, that MongoDB limits the number of results
+	 * by default. Make sure to add an explicit limit to the {@link NearQuery} if you expect a particular number of
+	 * results.
 	 * 
 	 * @param near must not be {@literal null}.
 	 * @param entityClass must not be {@literal null}.
@@ -423,7 +469,9 @@ public interface MongoOperations {
 	<T> GeoResults<T> geoNear(NearQuery near, Class<T> entityClass);
 
 	/**
-	 * Returns {@link GeoResult} for all entities matching the given {@link NearQuery}.
+	 * Returns {@link GeoResults} for all entities matching the given {@link NearQuery}. Note, that MongoDB limits the
+	 * number of results by default. Make sure to add an explicit limit to the {@link NearQuery} if you expect a
+	 * particular number of results.
 	 * 
 	 * @param near must not be {@literal null}.
 	 * @param entityClass must not be {@literal null}.
@@ -651,13 +699,27 @@ public interface MongoOperations {
 	long count(Query query, Class<?> entityClass);
 
 	/**
-	 * Returns the number of documents for the given {@link Query} querying the given collection.
+	 * Returns the number of documents for the given {@link Query} querying the given collection. The given {@link Query}
+	 * must solely consist of document field references as we lack type information to map potential property references
+	 * onto document fields. TO make sure the query gets mapped, use {@link #count(Query, Class, String)}.
 	 * 
 	 * @param query
 	 * @param collectionName must not be {@literal null} or empty.
 	 * @return
+	 * @see #count(Query, Class, String)
 	 */
 	long count(Query query, String collectionName);
+
+	/**
+	 * Returns the number of documents for the given {@link Query} by querying the given collection using the given entity
+	 * class to map the given {@link Query}.
+	 * 
+	 * @param query
+	 * @param entityClass must not be {@literal null}.
+	 * @param collectionName must not be {@literal null} or empty.
+	 * @return
+	 */
+	long count(Query query, Class<?> entityClass, String collectionName);
 
 	/**
 	 * Insert the object into the collection for the entity type of the object to save.
@@ -863,7 +925,7 @@ public interface MongoOperations {
 	 * 
 	 * @param object
 	 */
-	void remove(Object object);
+	WriteResult remove(Object object);
 
 	/**
 	 * Removes the given object from the given collection.
@@ -871,7 +933,7 @@ public interface MongoOperations {
 	 * @param object
 	 * @param collection must not be {@literal null} or empty.
 	 */
-	void remove(Object object, String collection);
+	WriteResult remove(Object object, String collection);
 
 	/**
 	 * Remove all documents that match the provided query document criteria from the the collection used to store the
@@ -880,7 +942,7 @@ public interface MongoOperations {
 	 * @param query
 	 * @param entityClass
 	 */
-	void remove(Query query, Class<?> entityClass);
+	WriteResult remove(Query query, Class<?> entityClass);
 
 	/**
 	 * Remove all documents that match the provided query document criteria from the the collection used to store the
@@ -890,7 +952,7 @@ public interface MongoOperations {
 	 * @param entityClass
 	 * @param collectionName
 	 */
-	void remove(Query query, Class<?> entityClass, String collectionName);
+	WriteResult remove(Query query, Class<?> entityClass, String collectionName);
 
 	/**
 	 * Remove all documents from the specified collection that match the provided query document criteria. There is no
@@ -899,7 +961,40 @@ public interface MongoOperations {
 	 * @param query the query document that specifies the criteria used to remove a record
 	 * @param collectionName name of the collection where the objects will removed
 	 */
-	void remove(Query query, String collectionName);
+	WriteResult remove(Query query, String collectionName);
+
+	/**
+	 * Returns and removes all documents form the specified collection that match the provided query.
+	 * 
+	 * @param query
+	 * @param collectionName
+	 * @return
+	 * @since 1.5
+	 */
+	<T> List<T> findAllAndRemove(Query query, String collectionName);
+
+	/**
+	 * Returns and removes all documents matching the given query form the collection used to store the entityClass.
+	 * 
+	 * @param query
+	 * @param entityClass
+	 * @return
+	 * @since 1.5
+	 */
+	<T> List<T> findAllAndRemove(Query query, Class<T> entityClass);
+
+	/**
+	 * Returns and removes all documents that match the provided query document criteria from the the collection used to
+	 * store the entityClass. The Class parameter is also used to help convert the Id of the object if it is present in
+	 * the query.
+	 * 
+	 * @param query
+	 * @param entityClass
+	 * @param collectionName
+	 * @return
+	 * @since 1.5
+	 */
+	<T> List<T> findAllAndRemove(Query query, Class<T> entityClass, String collectionName);
 
 	/**
 	 * Returns the underlying {@link MongoConverter}.
@@ -907,4 +1002,5 @@ public interface MongoOperations {
 	 * @return
 	 */
 	MongoConverter getConverter();
+
 }

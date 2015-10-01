@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,6 +28,9 @@ import org.springframework.core.type.filter.AnnotationTypeFilter;
 import org.springframework.data.annotation.Persistent;
 import org.springframework.data.authentication.UserCredentials;
 import org.springframework.data.mapping.context.MappingContextIsNewStrategyFactory;
+import org.springframework.data.mapping.model.CamelCaseAbbreviatingFieldNamingStrategy;
+import org.springframework.data.mapping.model.FieldNamingStrategy;
+import org.springframework.data.mapping.model.PropertyNameFieldNamingStrategy;
 import org.springframework.data.mongodb.MongoDbFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.SimpleMongoDbFactory;
@@ -35,7 +38,6 @@ import org.springframework.data.mongodb.core.convert.CustomConversions;
 import org.springframework.data.mongodb.core.convert.DbRefResolver;
 import org.springframework.data.mongodb.core.convert.DefaultDbRefResolver;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
-import org.springframework.data.mongodb.core.mapping.CamelCaseAbbreviatingFieldNamingStrategy;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.support.CachingIsNewStrategyFactory;
@@ -44,6 +46,7 @@ import org.springframework.util.ClassUtils;
 import org.springframework.util.StringUtils;
 
 import com.mongodb.Mongo;
+import com.mongodb.MongoClient;
 
 /**
  * Base class for Spring Data MongoDB configuration using JavaConfig.
@@ -51,6 +54,8 @@ import com.mongodb.Mongo;
  * @author Mark Pollack
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Ryan Tenney
+ * @author Christoph Strobl
  */
 @Configuration
 public abstract class AbstractMongoConfiguration {
@@ -67,7 +72,10 @@ public abstract class AbstractMongoConfiguration {
 	 * returned by {@link #getDatabaseName()} later on effectively.
 	 * 
 	 * @return
+	 * @deprecated since 1.7. {@link MongoClient} should hold authentication data within
+	 *             {@link MongoClient#getCredentialsList()}
 	 */
+	@Deprecated
 	protected String getAuthenticationDatabaseName() {
 		return null;
 	}
@@ -116,7 +124,9 @@ public abstract class AbstractMongoConfiguration {
 	 *         entities.
 	 */
 	protected String getMappingBasePackage() {
-		return getClass().getPackage().getName();
+
+		Package mappingBasePackage = getClass().getPackage();
+		return mappingBasePackage == null ? null : mappingBasePackage.getName();
 	}
 
 	/**
@@ -124,7 +134,10 @@ public abstract class AbstractMongoConfiguration {
 	 * be used.
 	 * 
 	 * @return
+	 * @deprecated since 1.7. {@link MongoClient} should hold authentication data within
+	 *             {@link MongoClient#getCredentialsList()}
 	 */
+	@Deprecated
 	protected UserCredentials getUserCredentials() {
 		return null;
 	}
@@ -142,10 +155,7 @@ public abstract class AbstractMongoConfiguration {
 		MongoMappingContext mappingContext = new MongoMappingContext();
 		mappingContext.setInitialEntitySet(getInitialEntitySet());
 		mappingContext.setSimpleTypeHolder(customConversions().getSimpleTypeHolder());
-
-		if (abbreviateFieldNames()) {
-			mappingContext.setFieldNamingStrategy(new CamelCaseAbbreviatingFieldNamingStrategy());
-		}
+		mappingContext.setFieldNamingStrategy(fieldNamingStrategy());
 
 		return mappingContext;
 	}
@@ -229,5 +239,16 @@ public abstract class AbstractMongoConfiguration {
 	 */
 	protected boolean abbreviateFieldNames() {
 		return false;
+	}
+
+	/**
+	 * Configures a {@link FieldNamingStrategy} on the {@link MongoMappingContext} instance created.
+	 * 
+	 * @return
+	 * @since 1.5
+	 */
+	protected FieldNamingStrategy fieldNamingStrategy() {
+		return abbreviateFieldNames() ? new CamelCaseAbbreviatingFieldNamingStrategy()
+				: PropertyNameFieldNamingStrategy.INSTANCE;
 	}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2013 the original author or authors.
+ * Copyright 2010-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
-import org.springframework.beans.factory.DisposableBean;
-import org.springframework.beans.factory.FactoryBean;
-import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.config.AbstractFactoryBean;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.support.PersistenceExceptionTranslator;
 import org.springframework.data.mongodb.CannotGetMongoDbConnectionException;
@@ -40,12 +38,14 @@ import com.mongodb.WriteConcern;
  * @author Graeme Rocher
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  * @since 1.0
+ * @deprecated since 1.7. Please use {@link MongoClientFactoryBean} instead.
  */
-public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, DisposableBean,
-		PersistenceExceptionTranslator {
+@Deprecated
+public class MongoFactoryBean extends AbstractFactoryBean<Mongo> implements PersistenceExceptionTranslator {
 
-	private Mongo mongo;
+	private static final PersistenceExceptionTranslator DEFAULT_EXCEPTION_TRANSLATOR = new MongoExceptionTranslator();
 
 	private MongoOptions mongoOptions;
 	private String host;
@@ -53,9 +53,11 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 	private WriteConcern writeConcern;
 	private List<ServerAddress> replicaSetSeeds;
 	private List<ServerAddress> replicaPair;
+	private PersistenceExceptionTranslator exceptionTranslator = DEFAULT_EXCEPTION_TRANSLATOR;
 
-	private PersistenceExceptionTranslator exceptionTranslator = new MongoExceptionTranslator();
-
+	/**
+	 * @param mongoOptions
+	 */
 	public void setMongoOptions(MongoOptions mongoOptions) {
 		this.mongoOptions = mongoOptions;
 	}
@@ -66,7 +68,6 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 
 	/**
 	 * @deprecated use {@link #setReplicaSetSeeds(ServerAddress[])} instead
-	 * 
 	 * @param replicaPair
 	 */
 	@Deprecated
@@ -75,30 +76,19 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 	}
 
 	/**
-	 * @param elements the elements to filter <T>
-	 * @return a new unmodifiable {@link List#} from the given elements without nulls
+	 * Configures the host to connect to.
+	 * 
+	 * @param host
 	 */
-	private <T> List<T> filterNonNullElementsAsList(T[] elements) {
-
-		if (elements == null) {
-			return Collections.emptyList();
-		}
-
-		List<T> candidateElements = new ArrayList<T>();
-
-		for (T element : elements) {
-			if (element != null) {
-				candidateElements.add(element);
-			}
-		}
-
-		return Collections.unmodifiableList(candidateElements);
-	}
-
 	public void setHost(String host) {
 		this.host = host;
 	}
 
+	/**
+	 * Configures the port to connect to.
+	 * 
+	 * @param port
+	 */
 	public void setPort(int port) {
 		this.port = port;
 	}
@@ -112,12 +102,13 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 		this.writeConcern = writeConcern;
 	}
 
+	/**
+	 * Configures the {@link PersistenceExceptionTranslator} to use.
+	 * 
+	 * @param exceptionTranslator can be {@literal null}.
+	 */
 	public void setExceptionTranslator(PersistenceExceptionTranslator exceptionTranslator) {
-		this.exceptionTranslator = exceptionTranslator;
-	}
-
-	public Mongo getObject() throws Exception {
-		return mongo;
+		this.exceptionTranslator = exceptionTranslator == null ? DEFAULT_EXCEPTION_TRANSLATOR : exceptionTranslator;
 	}
 
 	/*
@@ -130,14 +121,6 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 
 	/*
 	 * (non-Javadoc)
-	 * @see org.springframework.beans.factory.FactoryBean#isSingleton()
-	 */
-	public boolean isSingleton() {
-		return true;
-	}
-
-	/*
-	 * (non-Javadoc)
 	 * @see org.springframework.dao.support.PersistenceExceptionTranslator#translateExceptionIfPossible(java.lang.RuntimeException)
 	 */
 	public DataAccessException translateExceptionIfPossible(RuntimeException ex) {
@@ -146,10 +129,10 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 
 	/* 
 	 * (non-Javadoc)
-	 * @see org.springframework.beans.factory.InitializingBean#afterPropertiesSet()
+	 * @see org.springframework.beans.factory.config.AbstractFactoryBean#createInstance()
 	 */
-	@SuppressWarnings("deprecation")
-	public void afterPropertiesSet() throws Exception {
+	@Override
+	protected Mongo createInstance() throws Exception {
 
 		Mongo mongo;
 		ServerAddress defaultOptions = new ServerAddress();
@@ -175,18 +158,42 @@ public class MongoFactoryBean implements FactoryBean<Mongo>, InitializingBean, D
 			mongo.setWriteConcern(writeConcern);
 		}
 
-		this.mongo = mongo;
-	}
-
-	private boolean isNullOrEmpty(Collection<?> elements) {
-		return elements == null || elements.isEmpty();
+		return mongo;
 	}
 
 	/* 
 	 * (non-Javadoc)
-	 * @see org.springframework.beans.factory.DisposableBean#destroy()
+	 * @see org.springframework.beans.factory.config.AbstractFactoryBean#destroyInstance(java.lang.Object)
 	 */
-	public void destroy() throws Exception {
-		this.mongo.close();
+	@Override
+	protected void destroyInstance(Mongo mongo) throws Exception {
+		mongo.close();
+	}
+
+	private static boolean isNullOrEmpty(Collection<?> elements) {
+		return elements == null || elements.isEmpty();
+	}
+
+	/**
+	 * Returns the given array as {@link List} with all {@literal null} elements removed.
+	 * 
+	 * @param elements the elements to filter <T>
+	 * @return a new unmodifiable {@link List#} from the given elements without nulls
+	 */
+	private static <T> List<T> filterNonNullElementsAsList(T[] elements) {
+
+		if (elements == null) {
+			return Collections.emptyList();
+		}
+
+		List<T> candidateElements = new ArrayList<T>();
+
+		for (T element : elements) {
+			if (element != null) {
+				candidateElements.add(element);
+			}
+		}
+
+		return Collections.unmodifiableList(candidateElements);
 	}
 }

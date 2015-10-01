@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2013 the original author or authors.
+ * Copyright 2010-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,23 +25,71 @@ import java.lang.annotation.Target;
  * 
  * @author Jon Brisbin
  * @author Laurent Canet
+ * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 @Target(ElementType.FIELD)
 @Retention(RetentionPolicy.RUNTIME)
 public @interface GeoSpatialIndexed {
 
 	/**
-	 * Name of the property in the document that contains the [x, y] or radial coordinates to index.
+	 * Index name. <br />
+	 * <br />
+	 * The name will only be applied as is when defined on root level. For usage on nested or embedded structures the
+	 * provided name will be prefixed with the path leading to the entity. <br />
+	 * <br />
+	 * The structure below
+	 * 
+	 * <pre>
+	 * <code>
+	 * &#64;Document
+	 * class Root {
+	 *   Hybrid hybrid;
+	 *   Nested nested;
+	 * }
+	 * 
+	 * &#64;Document
+	 * class Hybrid {
+	 *   &#64;GeoSpatialIndexed(name="index") Point h1;
+	 * }
+	 * 
+	 * class Nested {
+	 *   &#64;GeoSpatialIndexed(name="index") Point n1;
+	 * }
+	 * </code>
+	 * </pre>
+	 * 
+	 * resolves in the following index structures
+	 * 
+	 * <pre>
+	 * <code>
+	 * db.root.createIndex( { hybrid.h1: "2d" } , { name: "hybrid.index" } )
+	 * db.root.createIndex( { nested.n1: "2d" } , { name: "nested.index" } )
+	 * db.hybrid.createIndex( { h1: "2d" } , { name: "index" } )
+	 * </code>
+	 * </pre>
 	 * 
 	 * @return
 	 */
 	String name() default "";
 
 	/**
+	 * If set to {@literal true} then MongoDB will ignore the given index name and instead generate a new name. Defaults
+	 * to {@literal false}.
+	 * 
+	 * @return
+	 * @since 1.5
+	 */
+	boolean useGeneratedName() default false;
+
+	/**
 	 * Name of the collection in which to create the index.
 	 * 
 	 * @return
+	 * @deprecated The collection name is derived from the domain type. Fixing the collection via this attribute might
+	 *             result in broken definitions. Will be removed in 1.7.
 	 */
+	@Deprecated
 	String collection() default "";
 
 	/**

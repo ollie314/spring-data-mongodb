@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 by the original author(s).
+ * Copyright 2011-2014 by the original author(s).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,10 @@ import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mapping.PersistentProperty;
+import org.springframework.data.mapping.model.FieldNamingStrategy;
 import org.springframework.data.mapping.model.MappingException;
+import org.springframework.data.mapping.model.PropertyNameFieldNamingStrategy;
 import org.springframework.data.mapping.model.SimpleTypeHolder;
 import org.springframework.data.util.ClassTypeInformation;
 import org.springframework.util.ReflectionUtils;
@@ -35,13 +38,13 @@ import org.springframework.util.ReflectionUtils;
  * Unit test for {@link BasicMongoPersistentProperty}.
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
  */
 public class BasicMongoPersistentPropertyUnitTests {
 
 	MongoPersistentEntity<Person> entity;
 
-	@Rule
-	public ExpectedException exception = ExpectedException.none();
+	@Rule public ExpectedException exception = ExpectedException.none();
 
 	@Before
 	public void setup() {
@@ -121,29 +124,99 @@ public class BasicMongoPersistentPropertyUnitTests {
 		property.getFieldName();
 	}
 
+	/**
+	 * @see DATAMONGO-937
+	 */
+	@Test
+	public void shouldDetectAnnotatedLanguagePropertyCorrectly() {
+
+		MongoPersistentProperty property = getPropertyFor(DocumentWithLanguageProperty.class, "lang");
+		assertThat(property.isLanguageProperty(), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-937
+	 */
+	@Test
+	public void shouldDetectIplicitLanguagePropertyCorrectly() {
+
+		MongoPersistentProperty property = getPropertyFor(DocumentWithImplicitLanguageProperty.class, "language");
+		assertThat(property.isLanguageProperty(), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-976
+	 */
+	@Test
+	public void shouldDetectTextScorePropertyCorrectly() {
+
+		MongoPersistentProperty property = getPropertyFor(DocumentWithTextScoreProperty.class, "score");
+		assertThat(property.isTextScoreProperty(), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-976
+	 */
+	@Test
+	public void shouldDetectTextScoreAsReadOnlyProperty() {
+
+		MongoPersistentProperty property = getPropertyFor(DocumentWithTextScoreProperty.class, "score");
+		assertThat(property.isWritable(), is(false));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void shouldNotConsiderExplicitlyNameFieldAsIdProperty() {
+
+		MongoPersistentProperty property = getPropertyFor(DocumentWithExplicitlyRenamedIdProperty.class, "id");
+		assertThat(property.isIdProperty(), is(false));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void shouldConsiderPropertyAsIdWhenExplicitlyAnnotatedWithIdEvenWhenExplicitlyNamePresent() {
+
+		MongoPersistentProperty property = getPropertyFor(DocumentWithExplicitlyRenamedIdPropertyHavingIdAnnotation.class,
+				"id");
+		assertThat(property.isIdProperty(), is(true));
+	}
+
 	private MongoPersistentProperty getPropertyFor(Field field) {
-		return new BasicMongoPersistentProperty(field, null, entity, new SimpleTypeHolder(),
+		return getPropertyFor(entity, field);
+	}
+
+	private <T> MongoPersistentProperty getPropertyFor(Class<T> type, String fieldname) {
+		return getPropertyFor(new BasicMongoPersistentEntity<T>(ClassTypeInformation.from(type)), fieldname);
+	}
+
+	private MongoPersistentProperty getPropertyFor(MongoPersistentEntity<?> persistentEntity, String fieldname) {
+		return getPropertyFor(persistentEntity, ReflectionUtils.findField(persistentEntity.getType(), fieldname));
+	}
+
+	private MongoPersistentProperty getPropertyFor(MongoPersistentEntity<?> persistentEntity, Field field) {
+		return new BasicMongoPersistentProperty(field, null, persistentEntity, new SimpleTypeHolder(),
 				PropertyNameFieldNamingStrategy.INSTANCE);
 	}
 
 	class Person {
 
-		@Id
-		String id;
+		@Id String id;
 
-		@org.springframework.data.mongodb.core.mapping.Field("foo")
-		String firstname;
+		@org.springframework.data.mongodb.core.mapping.Field("foo") String firstname;
 		String lastname;
 
-		@org.springframework.data.mongodb.core.mapping.Field(order = -20)
-		String ssn;
+		@org.springframework.data.mongodb.core.mapping.Field(order = -20) String ssn;
 	}
 
 	enum UppercaseFieldNamingStrategy implements FieldNamingStrategy {
 
 		INSTANCE;
 
-		public String getFieldName(MongoPersistentProperty property) {
+		public String getFieldName(PersistentProperty<?> property) {
 			return property.getName().toUpperCase(Locale.US);
 		}
 	}
@@ -152,8 +225,32 @@ public class BasicMongoPersistentPropertyUnitTests {
 
 		INSTANCE;
 
-		public String getFieldName(MongoPersistentProperty property) {
+		public String getFieldName(PersistentProperty<?> property) {
 			return null;
 		}
+	}
+
+	static class DocumentWithLanguageProperty {
+
+		@Language String lang;
+	}
+
+	static class DocumentWithImplicitLanguageProperty {
+
+		String language;
+	}
+
+	static class DocumentWithTextScoreProperty {
+		@TextScore Float score;
+	}
+
+	static class DocumentWithExplicitlyRenamedIdProperty {
+
+		@org.springframework.data.mongodb.core.mapping.Field("id") String id;
+	}
+
+	static class DocumentWithExplicitlyRenamedIdPropertyHavingIdAnnotation {
+
+		@Id @org.springframework.data.mongodb.core.mapping.Field("id") String id;
 	}
 }

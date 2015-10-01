@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2013-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,16 +32,22 @@ import com.mongodb.DBObject;
 class ExposedFieldsAggregationOperationContext implements AggregationOperationContext {
 
 	private final ExposedFields exposedFields;
+	private final AggregationOperationContext rootContext;
 
 	/**
-	 * Creates a new {@link ExposedFieldsAggregationOperationContext} from the given {@link ExposedFields}.
+	 * Creates a new {@link ExposedFieldsAggregationOperationContext} from the given {@link ExposedFields}. Uses the given
+	 * {@link AggregationOperationContext} to perform a mapping to mongo types if necessary.
 	 * 
 	 * @param exposedFields must not be {@literal null}.
+	 * @param rootContext must not be {@literal null}.
 	 */
-	public ExposedFieldsAggregationOperationContext(ExposedFields exposedFields) {
+	public ExposedFieldsAggregationOperationContext(ExposedFields exposedFields, AggregationOperationContext rootContext) {
 
 		Assert.notNull(exposedFields, "ExposedFields must not be null!");
+		Assert.notNull(rootContext, "RootContext must not be null!");
+
 		this.exposedFields = exposedFields;
+		this.rootContext = rootContext;
 	}
 
 	/* 
@@ -50,7 +56,7 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 	 */
 	@Override
 	public DBObject getMappedObject(DBObject dbObject) {
-		return dbObject;
+		return rootContext.getMappedObject(dbObject);
 	}
 
 	/* 
@@ -59,7 +65,7 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 	 */
 	@Override
 	public FieldReference getReference(Field field) {
-		return getReference(field.getTarget());
+		return getReference(field, field.getTarget());
 	}
 
 	/* 
@@ -68,11 +74,42 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 	 */
 	@Override
 	public FieldReference getReference(String name) {
+		return getReference(null, name);
+	}
 
-		ExposedField field = exposedFields.getField(name);
+	/**
+	 * Returns a {@link FieldReference} to the given {@link Field} with the given {@code name}.
+	 * 
+	 * @param field may be {@literal null}
+	 * @param name must not be {@literal null}
+	 * @return
+	 */
+	private FieldReference getReference(Field field, String name) {
 
-		if (field != null) {
-			return new FieldReference(field);
+		Assert.notNull(name, "Name must not be null!");
+
+		ExposedField exposedField = exposedFields.getField(name);
+
+		if (exposedField != null) {
+
+			if (field != null) {
+				// we return a FieldReference to the given field directly to make sure that we reference the proper alias here.
+				return new FieldReference(new ExposedField(field, exposedField.isSynthetic()));
+			}
+
+			return new FieldReference(exposedField);
+		}
+
+		if (name.contains(".")) {
+
+			// for nested field references we only check that the root field exists.
+			ExposedField rootField = exposedFields.getField(name.split("\\.")[0]);
+
+			if (rootField != null) {
+
+				// We have to synthetic to true, in order to render the field-name as is.
+				return new FieldReference(new ExposedField(name, true));
+			}
 		}
 
 		throw new IllegalArgumentException(String.format("Invalid reference '%s'!", name));

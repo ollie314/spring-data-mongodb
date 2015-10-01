@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,14 +15,18 @@
  */
 package org.springframework.data.mongodb.core.aggregation;
 
-import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.CriteriaDefinition;
 import org.springframework.util.Assert;
 
 import com.mongodb.BasicDBObject;
 import com.mongodb.DBObject;
 
 /**
- * Encapsulates the {@code $match}-operation
+ * Encapsulates the {@code $match}-operation.
+ * <p>
+ * We recommend to use the static factory method
+ * {@link Aggregation#match(org.springframework.data.mongodb.core.query.Criteria)} instead of creating instances of this
+ * class directly.
  * 
  * @see http://docs.mongodb.org/manual/reference/aggregation/match/
  * @author Sebastian Herold
@@ -32,17 +36,17 @@ import com.mongodb.DBObject;
  */
 public class MatchOperation implements AggregationOperation {
 
-	private final Criteria criteria;
+	private final CriteriaDefinition criteriaDefinition;
 
 	/**
-	 * Creates a new {@link MatchOperation} for the given {@link Criteria}.
+	 * Creates a new {@link MatchOperation} for the given {@link CriteriaDefinition}.
 	 * 
-	 * @param criteria must not be {@literal null}.
+	 * @param criteriaDefinition must not be {@literal null}.
 	 */
-	public MatchOperation(Criteria criteria) {
+	public MatchOperation(CriteriaDefinition criteriaDefinition) {
 
-		Assert.notNull(criteria, "Criteria must not be null!");
-		this.criteria = criteria;
+		Assert.notNull(criteriaDefinition, "Criteria must not be null!");
+		this.criteriaDefinition = criteriaDefinition;
 	}
 
 	/* 
@@ -51,6 +55,6 @@ public class MatchOperation implements AggregationOperation {
 	 */
 	@Override
 	public DBObject toDBObject(AggregationOperationContext context) {
-		return new BasicDBObject("$match", context.getMappedObject(criteria.getCriteriaObject()));
+		return new BasicDBObject("$match", context.getMappedObject(criteriaDefinition.getCriteriaObject()));
 	}
 }

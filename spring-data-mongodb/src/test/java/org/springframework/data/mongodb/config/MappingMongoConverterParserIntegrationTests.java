@@ -21,20 +21,24 @@ import static org.junit.Assert.*;
 import java.util.Collections;
 import java.util.Set;
 
-import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
 import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.beans.factory.config.BeanReference;
+import org.springframework.beans.factory.parsing.BeanDefinitionParsingException;
+import org.springframework.beans.factory.support.BeanDefinitionRegistry;
 import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 import org.springframework.beans.factory.xml.XmlBeanDefinitionReader;
 import org.springframework.core.convert.TypeDescriptor;
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.core.convert.converter.GenericConverter;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.data.mapping.model.CamelCaseAbbreviatingFieldNamingStrategy;
 import org.springframework.data.mongodb.core.convert.CustomConversions;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
 import org.springframework.data.mongodb.core.convert.MongoTypeMapper;
 import org.springframework.data.mongodb.core.mapping.Account;
-import org.springframework.data.mongodb.core.mapping.CamelCaseAbbreviatingFieldNamingStrategy;
 import org.springframework.data.mongodb.repository.Person;
 import org.springframework.stereotype.Component;
 
@@ -45,17 +49,14 @@ import com.mongodb.DBObject;
  * 
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
+ * @author Ryan Tenney
  */
 public class MappingMongoConverterParserIntegrationTests {
 
-	DefaultListableBeanFactory factory;
+	@Rule public ExpectedException exception = ExpectedException.none();
 
-	@Before
-	public void setUp() {
-		factory = new DefaultListableBeanFactory();
-		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(factory);
-		reader.loadBeanDefinitions(new ClassPathResource("namespace/converter.xml"));
-	}
+	DefaultListableBeanFactory factory;
 
 	/**
 	 * @see DATAMONGO-243
@@ -63,6 +64,7 @@ public class MappingMongoConverterParserIntegrationTests {
 	@Test
 	public void allowsDbFactoryRefAttribute() {
 
+		loadValidConfiguration();
 		factory.getBeanDefinition("converter");
 		factory.getBean("converter");
 	}
@@ -73,6 +75,7 @@ public class MappingMongoConverterParserIntegrationTests {
 	@Test
 	public void hasCustomTypeMapper() {
 
+		loadValidConfiguration();
 		MappingMongoConverter converter = factory.getBean("converter", MappingMongoConverter.class);
 		MongoTypeMapper customMongoTypeMapper = factory.getBean(CustomMongoTypeMapper.class);
 
@@ -85,6 +88,7 @@ public class MappingMongoConverterParserIntegrationTests {
 	@Test
 	public void scansForConverterAndSetsUpCustomConversionsAccordingly() {
 
+		loadValidConfiguration();
 		CustomConversions conversions = factory.getBean(CustomConversions.class);
 		assertThat(conversions.hasCustomWriteTarget(Person.class), is(true));
 		assertThat(conversions.hasCustomWriteTarget(Account.class), is(true));
@@ -96,12 +100,83 @@ public class MappingMongoConverterParserIntegrationTests {
 	@Test
 	public void activatesAbbreviatingPropertiesCorrectly() {
 
+		loadValidConfiguration();
 		BeanDefinition definition = factory.getBeanDefinition("abbreviatingConverter.mongoMappingContext");
 		Object value = definition.getPropertyValues().getPropertyValue("fieldNamingStrategy").getValue();
 
 		assertThat(value, is(instanceOf(BeanDefinition.class)));
 		BeanDefinition strategy = (BeanDefinition) value;
 		assertThat(strategy.getBeanClassName(), is(CamelCaseAbbreviatingFieldNamingStrategy.class.getName()));
+	}
+
+	/**
+	 * @see DATAMONGO-866
+	 */
+	@Test
+	public void rejectsInvalidFieldNamingStrategyConfiguration() {
+
+		exception.expect(BeanDefinitionParsingException.class);
+		exception.expectMessage("abbreviation");
+		exception.expectMessage("field-naming-strategy-ref");
+
+		BeanDefinitionRegistry factory = new DefaultListableBeanFactory();
+		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(factory);
+		reader.loadBeanDefinitions(new ClassPathResource("namespace/converter-invalid.xml"));
+	}
+
+	/**
+	 * @see DATAMONGO-892
+	 */
+	@Test
+	public void shouldThrowBeanDefinitionParsingExceptionIfConverterDefinedAsNestedBean() {
+
+		exception.expect(BeanDefinitionParsingException.class);
+		exception.expectMessage("Mongo Converter must not be defined as nested bean.");
+
+		loadNestedBeanConfiguration();
+	}
+
+	/**
+	 * @see DATAMONGO-925, DATAMONGO-928
+	 */
+	@Test
+	public void shouldSupportCustomFieldNamingStrategy() {
+		assertStrategyReferenceSetFor("mappingConverterWithCustomFieldNamingStrategy");
+	}
+
+	/**
+	 * @see DATAMONGO-925, DATAMONGO-928
+	 */
+	@Test
+	public void shouldNotFailLoadingConfigIfAbbreviationIsDisabledAndStrategySet() {
+		assertStrategyReferenceSetFor("mappingConverterWithCustomFieldNamingStrategyAndAbbreviationDisabled");
+	}
+
+	private void loadValidConfiguration() {
+		this.loadConfiguration("namespace/converter.xml");
+	}
+
+	private void loadNestedBeanConfiguration() {
+		this.loadConfiguration("namespace/converter-nested-bean-definition.xml");
+	}
+
+	private void loadConfiguration(String configLocation) {
+		factory = new DefaultListableBeanFactory();
+		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(factory);
+		reader.loadBeanDefinitions(new ClassPathResource(configLocation));
+	}
+
+	private static void assertStrategyReferenceSetFor(String beanId) {
+
+		BeanDefinitionRegistry factory = new DefaultListableBeanFactory();
+		XmlBeanDefinitionReader reader = new XmlBeanDefinitionReader(factory);
+		reader.loadBeanDefinitions(new ClassPathResource("namespace/converter-custom-fieldnamingstrategy.xml"));
+
+		BeanDefinition definition = reader.getRegistry().getBeanDefinition(beanId.concat(".mongoMappingContext"));
+		BeanReference value = (BeanReference) definition.getPropertyValues().getPropertyValue("fieldNamingStrategy")
+				.getValue();
+
+		assertThat(value.getBeanName(), is("customFieldNamingStrategy"));
 	}
 
 	@Component

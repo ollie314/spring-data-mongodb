@@ -1,5 +1,5 @@
 /*
- * Copyright 2011 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,20 +19,25 @@ import java.util.Arrays;
 import java.util.Iterator;
 
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Range;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Point;
 import org.springframework.data.mongodb.core.convert.MongoWriter;
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.Point;
+import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.repository.query.ParameterAccessor;
 
 /**
  * Simple {@link ParameterAccessor} that returns the given parameters unfiltered.
  * 
  * @author Oliver Gierke
+ * @author Christoh Strobl
+ * @author Thomas Darimont
  */
 class StubParameterAccessor implements MongoParameterAccessor {
 
 	private final Object[] values;
+	private Range<Distance> range = new Range<Distance>(null, null);
 
 	/**
 	 * Creates a new {@link ConvertingParameterAccessor} backed by a {@link StubParameterAccessor} simply returning the
@@ -46,8 +51,18 @@ class StubParameterAccessor implements MongoParameterAccessor {
 		return new ConvertingParameterAccessor(converter, new StubParameterAccessor(parameters));
 	}
 
+	@SuppressWarnings("unchecked")
 	public StubParameterAccessor(Object... values) {
+
 		this.values = values;
+
+		for (Object value : values) {
+			if (value instanceof Range) {
+				this.range = (Range<Distance>) value;
+			} else if (value instanceof Distance) {
+				this.range = new Range<Distance>(null, (Distance) value);
+			}
+		}
 	}
 
 	/*
@@ -82,12 +97,13 @@ class StubParameterAccessor implements MongoParameterAccessor {
 		return null;
 	}
 
-	/*
+	/* 
 	 * (non-Javadoc)
-	 * @see org.springframework.data.mongodb.repository.MongoParameterAccessor#getMaxDistance()
+	 * @see org.springframework.data.mongodb.repository.query.MongoParameterAccessor#getDistanceRange()
 	 */
-	public Distance getMaxDistance() {
-		return null;
+	@Override
+	public Range<Distance> getDistanceRange() {
+		return range;
 	}
 
 	/*
@@ -104,5 +120,22 @@ class StubParameterAccessor implements MongoParameterAccessor {
 	 */
 	public Point getGeoNearLocation() {
 		return null;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.query.MongoParameterAccessor#getFullText()
+	 */
+	@Override
+	public TextCriteria getFullText() {
+		return null;
+	}
+	
+	/* (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.query.MongoParameterAccessor#getValues()
+	 */
+	@Override
+	public Object[] getValues() {
+		return this.values;
 	}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@ import java.util.Date;
 import java.util.List;
 import java.util.Scanner;
 
+import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
 import org.joda.time.LocalDateTime;
 import org.junit.After;
 import org.junit.Before;
@@ -44,10 +46,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.geo.Metrics;
 import org.springframework.data.mapping.model.MappingException;
 import org.springframework.data.mongodb.core.CollectionCallback;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.Venue;
+import org.springframework.data.mongodb.core.aggregation.AggregationTests.CarDescriptor.Entry;
+import org.springframework.data.mongodb.core.index.GeospatialIndex;
+import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.repository.Person;
 import org.springframework.data.util.Version;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
@@ -66,6 +75,7 @@ import com.mongodb.util.JSON;
  * @author Tobias Trelle
  * @author Thomas Darimont
  * @author Oliver Gierke
+ * @author Christoph Strobl
  */
 @RunWith(SpringJUnit4ClassRunner.class)
 @ContextConfiguration("classpath:infrastructure.xml")
@@ -74,6 +84,7 @@ public class AggregationTests {
 	private static final String INPUT_COLLECTION = "aggregation_test_collection";
 	private static final Logger LOGGER = LoggerFactory.getLogger(AggregationTests.class);
 	private static final Version TWO_DOT_FOUR = new Version(2, 4);
+	private static final Version TWO_DOT_SIX = new Version(2, 6);
 
 	private static boolean initialized = false;
 
@@ -111,6 +122,10 @@ public class AggregationTests {
 		mongoTemplate.dropCollection(Data.class);
 		mongoTemplate.dropCollection(DATAMONGO788.class);
 		mongoTemplate.dropCollection(User.class);
+		mongoTemplate.dropCollection(Person.class);
+		mongoTemplate.dropCollection(Reservation.class);
+		mongoTemplate.dropCollection(Venue.class);
+		mongoTemplate.dropCollection(MeterData.class);
 	}
 
 	/**
@@ -189,7 +204,6 @@ public class AggregationTests {
 		AggregationResults<TagCount> results = mongoTemplate.aggregate(agg, INPUT_COLLECTION, TagCount.class);
 
 		assertThat(results, is(notNullValue()));
-		assertThat(results.getServerUsed(), endsWith("127.0.0.1:27017"));
 
 		List<TagCount> tagCount = results.getMappedResults();
 
@@ -217,7 +231,6 @@ public class AggregationTests {
 		AggregationResults<TagCount> results = mongoTemplate.aggregate(aggregation, INPUT_COLLECTION, TagCount.class);
 
 		assertThat(results, is(notNullValue()));
-		assertThat(results.getServerUsed(), endsWith("127.0.0.1:27017"));
 
 		List<TagCount> tagCount = results.getMappedResults();
 
@@ -241,7 +254,6 @@ public class AggregationTests {
 		AggregationResults<TagCount> results = mongoTemplate.aggregate(aggregation, INPUT_COLLECTION, TagCount.class);
 
 		assertThat(results, is(notNullValue()));
-		assertThat(results.getServerUsed(), endsWith("127.0.0.1:27017"));
 
 		List<TagCount> tagCount = results.getMappedResults();
 
@@ -413,23 +425,7 @@ public class AggregationTests {
 
 		createUserWithLikesDocuments();
 
-		/*
-		 ...
-		  $group: {
-				      _id:"$like",
-				      number:{ $sum:1}
-		 			 }
-		  ...
-		 
-		 */
-
-		TypedAggregation<UserWithLikes> agg = newAggregation(UserWithLikes.class, //
-				unwind("likes"), //
-				group("likes").count().as("number"), //
-				sort(DESC, "number"), //
-				limit(5), //
-				sort(ASC, previousOperation()) //
-		);
+		TypedAggregation<UserWithLikes> agg = createUsersWithCommonLikesAggregation();
 
 		assertThat(agg, is(notNullValue()));
 		assertThat(agg.toString(), is(notNullValue()));
@@ -444,6 +440,16 @@ public class AggregationTests {
 		assertLikeStats(result.getMappedResults().get(2), "c", 4);
 		assertLikeStats(result.getMappedResults().get(3), "d", 2);
 		assertLikeStats(result.getMappedResults().get(4), "e", 3);
+	}
+
+	protected TypedAggregation<UserWithLikes> createUsersWithCommonLikesAggregation() {
+		return newAggregation(UserWithLikes.class, //
+				unwind("likes"), //
+				group("likes").count().as("number"), //
+				sort(DESC, "number"), //
+				limit(5), //
+				sort(ASC, previousOperation()) //
+		);
 	}
 
 	@Test
@@ -822,6 +828,246 @@ public class AggregationTests {
 		assertThat(invoice.getTotalAmount(), is(closeTo(9.877, 000001)));
 	}
 
+	/**
+	 * @see DATAMONGO-924
+	 */
+	@Test
+	public void shouldAllowGroupingByAliasedFieldDefinedInFormerAggregationStage() {
+
+		mongoTemplate.dropCollection(CarPerson.class);
+
+		CarPerson person1 = new CarPerson("first1", "last1", new CarDescriptor.Entry("MAKE1", "MODEL1", 2000),
+				new CarDescriptor.Entry("MAKE1", "MODEL2", 2001), new CarDescriptor.Entry("MAKE2", "MODEL3", 2010),
+				new CarDescriptor.Entry("MAKE3", "MODEL4", 2014));
+
+		CarPerson person2 = new CarPerson("first2", "last2", new CarDescriptor.Entry("MAKE3", "MODEL4", 2014));
+
+		CarPerson person3 = new CarPerson("first3", "last3", new CarDescriptor.Entry("MAKE2", "MODEL5", 2011));
+
+		mongoTemplate.save(person1);
+		mongoTemplate.save(person2);
+		mongoTemplate.save(person3);
+
+		TypedAggregation<CarPerson> agg = Aggregation.newAggregation(CarPerson.class,
+				unwind("descriptors.carDescriptor.entries"), //
+				project() //
+						.and("descriptors.carDescriptor.entries.make").as("make") //
+						.and("descriptors.carDescriptor.entries.model").as("model") //
+						.and("firstName").as("firstName") //
+						.and("lastName").as("lastName"), //
+				group("make"));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(agg, DBObject.class);
+
+		assertThat(result.getMappedResults(), hasSize(3));
+	}
+
+	/**
+	 * @see DATAMONGO-960
+	 */
+	@Test
+	public void returnFiveMostCommonLikesAggregationFrameworkExampleWithSortOnDiskOptionEnabled() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(TWO_DOT_SIX));
+
+		createUserWithLikesDocuments();
+
+		TypedAggregation<UserWithLikes> agg = createUsersWithCommonLikesAggregation() //
+				.withOptions(newAggregationOptions().allowDiskUse(true).build());
+
+		assertThat(agg, is(notNullValue()));
+		assertThat(agg.toString(), is(notNullValue()));
+
+		AggregationResults<LikeStats> result = mongoTemplate.aggregate(agg, LikeStats.class);
+		assertThat(result, is(notNullValue()));
+		assertThat(result.getMappedResults(), is(notNullValue()));
+		assertThat(result.getMappedResults().size(), is(5));
+
+		assertLikeStats(result.getMappedResults().get(0), "a", 4);
+		assertLikeStats(result.getMappedResults().get(1), "b", 2);
+		assertLikeStats(result.getMappedResults().get(2), "c", 4);
+		assertLikeStats(result.getMappedResults().get(3), "d", 2);
+		assertLikeStats(result.getMappedResults().get(4), "e", 3);
+	}
+
+	/**
+	 * @see DATAMONGO-960
+	 */
+	@Test
+	public void returnFiveMostCommonLikesShouldReturnStageExecutionInformationWithExplainOptionEnabled() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(TWO_DOT_SIX));
+
+		createUserWithLikesDocuments();
+
+		TypedAggregation<UserWithLikes> agg = createUsersWithCommonLikesAggregation() //
+				.withOptions(newAggregationOptions().explain(true).build());
+
+		AggregationResults<LikeStats> result = mongoTemplate.aggregate(agg, LikeStats.class);
+
+		assertThat(result.getMappedResults(), is(empty()));
+
+		DBObject rawResult = result.getRawResults();
+
+		assertThat(rawResult, is(notNullValue()));
+		assertThat(rawResult.containsField("stages"), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-954
+	 */
+	@Test
+	public void shouldSupportReturningCurrentAggregationRoot() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(TWO_DOT_SIX));
+
+		mongoTemplate.save(new Person("p1_first", "p1_last", 25));
+		mongoTemplate.save(new Person("p2_first", "p2_last", 32));
+		mongoTemplate.save(new Person("p3_first", "p3_last", 25));
+		mongoTemplate.save(new Person("p4_first", "p4_last", 15));
+
+		List<DBObject> personsWithAge25 = mongoTemplate.find(Query.query(where("age").is(25)), DBObject.class,
+				mongoTemplate.getCollectionName(Person.class));
+
+		Aggregation agg = newAggregation(group("age").push(Aggregation.ROOT).as("users"));
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(agg, Person.class, DBObject.class);
+
+		assertThat(result.getMappedResults(), hasSize(3));
+		DBObject o = (DBObject) result.getMappedResults().get(2);
+
+		assertThat(o.get("_id"), is((Object) 25));
+		assertThat((List<?>) o.get("users"), hasSize(2));
+		assertThat((List<?>) o.get("users"), is(contains(personsWithAge25.toArray())));
+	}
+
+	/**
+	 * @see DATAMONGO-954
+	 * @see http
+	 *      ://stackoverflow.com/questions/24185987/using-root-inside-spring-data-mongodb-for-retrieving-whole-document
+	 */
+	@Test
+	public void shouldSupportReturningCurrentAggregationRootInReference() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(TWO_DOT_SIX));
+
+		mongoTemplate.save(new Reservation("0123", "42", 100));
+		mongoTemplate.save(new Reservation("0360", "43", 200));
+		mongoTemplate.save(new Reservation("0360", "44", 300));
+
+		Aggregation agg = newAggregation( //
+				match(where("hotelCode").is("0360")), //
+				sort(Direction.DESC, "confirmationNumber", "timestamp"), //
+				group("confirmationNumber") //
+						.first("timestamp").as("timestamp") //
+						.first(Aggregation.ROOT).as("reservationImage") //
+		);
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(agg, Reservation.class, DBObject.class);
+
+		assertThat(result.getMappedResults(), hasSize(2));
+	}
+
+	/**
+	 * @see DATAMONGO-975
+	 */
+	@Test
+	public void shouldRetrieveDateTimeFragementsCorrectly() throws Exception {
+
+		mongoTemplate.dropCollection(ObjectWithDate.class);
+
+		DateTime dateTime = new DateTime() //
+				.withYear(2014) //
+				.withMonthOfYear(2) //
+				.withDayOfMonth(7) //
+				.withTime(3, 4, 5, 6).toDateTime(DateTimeZone.UTC).toDateTimeISO();
+
+		ObjectWithDate owd = new ObjectWithDate(dateTime.toDate());
+		mongoTemplate.insert(owd);
+
+		ProjectionOperation dateProjection = Aggregation.project() //
+				.and("dateValue").extractHour().as("hour") //
+				.and("dateValue").extractMinute().as("min") //
+				.and("dateValue").extractSecond().as("second") //
+				.and("dateValue").extractMillisecond().as("millis") //
+				.and("dateValue").extractYear().as("year") //
+				.and("dateValue").extractMonth().as("month") //
+				.and("dateValue").extractWeek().as("week") //
+				.and("dateValue").extractDayOfYear().as("dayOfYear") //
+				.and("dateValue").extractDayOfMonth().as("dayOfMonth") //
+				.and("dateValue").extractDayOfWeek().as("dayOfWeek") //
+				.andExpression("dateValue + 86400000").extractDayOfYear().as("dayOfYearPlus1Day") //
+				.andExpression("dateValue + 86400000").project("dayOfYear").as("dayOfYearPlus1DayManually") //
+		;
+
+		Aggregation agg = newAggregation(dateProjection);
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(agg, ObjectWithDate.class, DBObject.class);
+
+		assertThat(result.getMappedResults(), hasSize(1));
+		DBObject dbo = result.getMappedResults().get(0);
+
+		assertThat(dbo.get("hour"), is((Object) dateTime.getHourOfDay()));
+		assertThat(dbo.get("min"), is((Object) dateTime.getMinuteOfHour()));
+		assertThat(dbo.get("second"), is((Object) dateTime.getSecondOfMinute()));
+		assertThat(dbo.get("millis"), is((Object) dateTime.getMillisOfSecond()));
+		assertThat(dbo.get("year"), is((Object) dateTime.getYear()));
+		assertThat(dbo.get("month"), is((Object) dateTime.getMonthOfYear()));
+		// dateTime.getWeekOfWeekyear()) returns 6 since for MongoDB the week starts on sunday and not on monday.
+		assertThat(dbo.get("week"), is((Object) 5));
+		assertThat(dbo.get("dayOfYear"), is((Object) dateTime.getDayOfYear()));
+		assertThat(dbo.get("dayOfMonth"), is((Object) dateTime.getDayOfMonth()));
+
+		// dateTime.getDayOfWeek()
+		assertThat(dbo.get("dayOfWeek"), is((Object) 6));
+		assertThat(dbo.get("dayOfYearPlus1Day"), is((Object) dateTime.plusDays(1).getDayOfYear()));
+		assertThat(dbo.get("dayOfYearPlus1DayManually"), is((Object) dateTime.plusDays(1).getDayOfYear()));
+	}
+
+	/**
+	 * @see DATAMONGO-1127
+	 */
+	@Test
+	public void shouldSupportGeoNearQueriesForAggregationWithDistanceField() {
+
+		mongoTemplate.insert(new Venue("Penn Station", -73.99408, 40.75057));
+		mongoTemplate.insert(new Venue("10gen Office", -73.99171, 40.738868));
+		mongoTemplate.insert(new Venue("Flatiron Building", -73.988135, 40.741404));
+
+		mongoTemplate.indexOps(Venue.class).ensureIndex(new GeospatialIndex("location"));
+
+		NearQuery geoNear = NearQuery.near(-73, 40, Metrics.KILOMETERS).num(10).maxDistance(150);
+
+		Aggregation agg = newAggregation(Aggregation.geoNear(geoNear, "distance"));
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(agg, Venue.class, DBObject.class);
+
+		assertThat(result.getMappedResults(), hasSize(3));
+
+		DBObject firstResult = result.getMappedResults().get(0);
+		assertThat(firstResult.containsField("distance"), is(true));
+		assertThat((Double) firstResult.get("distance"), closeTo(117.620092203928, 0.00001));
+	}
+
+	/**
+	 * @see DATAMONGO-1133
+	 */
+	@Test
+	public void shouldHonorFieldAliasesForFieldReferences() {
+
+		mongoTemplate.insert(new MeterData("m1", "counter1", 42));
+		mongoTemplate.insert(new MeterData("m1", "counter1", 13));
+		mongoTemplate.insert(new MeterData("m1", "counter1", 45));
+
+		TypedAggregation<MeterData> agg = newAggregation(MeterData.class, //
+				match(where("resourceId").is("m1")), //
+				group("counterName").sum("counterVolume").as("totalValue"));
+
+		AggregationResults<DBObject> results = mongoTemplate.aggregate(agg, DBObject.class);
+
+		assertThat(results.getMappedResults(), hasSize(1));
+		DBObject result = results.getMappedResults().get(0);
+
+		assertThat(result.get("_id"), is(equalTo((Object) "counter1")));
+		assertThat(result.get("totalValue"), is(equalTo((Object) 100.0)));
+	}
+
 	private void assertLikeStats(LikeStats like, String id, long count) {
 
 		assertThat(like, is(notNullValue()));
@@ -936,6 +1182,80 @@ public class AggregationTests {
 			this.id = id;
 			this.content = content;
 			this.createDate = createDate;
+		}
+	}
+
+	@org.springframework.data.mongodb.core.mapping.Document
+	static class CarPerson {
+
+		@Id private String id;
+		private String firstName;
+		private String lastName;
+		private Descriptors descriptors;
+
+		public CarPerson(String firstname, String lastname, Entry... entries) {
+			this.firstName = firstname;
+			this.lastName = lastname;
+
+			this.descriptors = new Descriptors();
+
+			this.descriptors.carDescriptor = new CarDescriptor(entries);
+		}
+	}
+
+	@SuppressWarnings("unused")
+	static class Descriptors {
+		private CarDescriptor carDescriptor;
+	}
+
+	static class CarDescriptor {
+
+		private List<Entry> entries = new ArrayList<AggregationTests.CarDescriptor.Entry>();
+
+		public CarDescriptor(Entry... entries) {
+
+			for (Entry entry : entries) {
+				this.entries.add(entry);
+			}
+		}
+
+		@SuppressWarnings("unused")
+		static class Entry {
+			private String make;
+			private String model;
+			private int year;
+
+			public Entry() {}
+
+			public Entry(String make, String model, int year) {
+				this.make = make;
+				this.model = model;
+				this.year = year;
+			}
+		}
+	}
+
+	static class Reservation {
+
+		String hotelCode;
+		String confirmationNumber;
+		int timestamp;
+
+		public Reservation() {}
+
+		public Reservation(String hotelCode, String confirmationNumber, int timestamp) {
+			this.hotelCode = hotelCode;
+			this.confirmationNumber = confirmationNumber;
+			this.timestamp = timestamp;
+		}
+	}
+
+	static class ObjectWithDate {
+
+		Date dateValue;
+
+		public ObjectWithDate(Date dateValue) {
+			this.dateValue = dateValue;
 		}
 	}
 }

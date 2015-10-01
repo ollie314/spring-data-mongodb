@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import static org.junit.Assert.*;
 import static org.springframework.data.mongodb.core.DBObjectTestUtils.*;
 import static org.springframework.data.mongodb.core.query.Criteria.*;
 import static org.springframework.data.mongodb.core.query.Query.*;
+import static org.springframework.data.mongodb.test.util.IsBsonObject.*;
 
 import java.math.BigInteger;
 import java.util.ArrayList;
@@ -34,20 +35,28 @@ import org.junit.runner.RunWith;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.geo.Point;
 import org.springframework.data.mongodb.MongoDbFactory;
 import org.springframework.data.mongodb.core.DBObjectTestUtils;
 import org.springframework.data.mongodb.core.Person;
+import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
+import org.springframework.data.mongodb.core.geo.GeoJsonPolygon;
 import org.springframework.data.mongodb.core.mapping.BasicMongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.DBRef;
+import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.Field;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
+import org.springframework.data.mongodb.core.mapping.TextScore;
 import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 
 import com.mongodb.BasicDBList;
 import com.mongodb.BasicDBObject;
+import com.mongodb.BasicDBObjectBuilder;
 import com.mongodb.DBObject;
 import com.mongodb.QueryBuilder;
 
@@ -378,7 +387,7 @@ public class QueryMapperUnitTests {
 	public void handleMapWithDBRefCorrectly() {
 
 		DBObject mapDbObject = new BasicDBObject();
-		mapDbObject.put("test", new com.mongodb.DBRef(null, "test", "test"));
+		mapDbObject.put("test", new com.mongodb.DBRef("test", "test"));
 		DBObject dbObject = new BasicDBObject();
 		dbObject.put("mapWithDBRef", mapDbObject);
 
@@ -568,8 +577,264 @@ public class QueryMapperUnitTests {
 		assertThat(mappedFields, is(notNullValue()));
 	}
 
+	/**
+	 * @see DATAMONGO-893
+	 */
+	@Test
+	public void classInformationShouldNotBePresentInDBObjectUsedInFinderMethods() {
+
+		EmbeddedClass embedded = new EmbeddedClass();
+		embedded.id = "1";
+
+		EmbeddedClass embedded2 = new EmbeddedClass();
+		embedded2.id = "2";
+		Query query = query(where("embedded").in(Arrays.asList(embedded, embedded2)));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(Foo.class));
+		assertThat(dbo.toString(), equalTo("{ \"embedded\" : { \"$in\" : [ { \"_id\" : \"1\"} , { \"_id\" : \"2\"}]}}"));
+	}
+
+	/**
+	 * @see DATAMONGO-647
+	 */
+	@Test
+	public void customizedFieldNameShouldBeMappedCorrectlyWhenApplyingSort() {
+
+		Query query = query(where("field").is("bar")).with(new Sort(Direction.DESC, "field"));
+		DBObject dbo = mapper.getMappedObject(query.getSortObject(), context.getPersistentEntity(CustomizedField.class));
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("foo", -1).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-973
+	 */
+	@Test
+	public void getMappedFieldsAppendsTextScoreFieldProperlyCorrectlyWhenNotPresent() {
+
+		Query query = new Query();
+
+		DBObject dbo = mapper.getMappedFields(query.getFieldsObject(),
+				context.getPersistentEntity(WithTextScoreProperty.class));
+
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("score", new BasicDBObject("$meta", "textScore")).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-973
+	 */
+	@Test
+	public void getMappedFieldsReplacesTextScoreFieldProperlyCorrectlyWhenPresent() {
+
+		Query query = new Query();
+		query.fields().include("textScore");
+
+		DBObject dbo = mapper.getMappedFields(query.getFieldsObject(),
+				context.getPersistentEntity(WithTextScoreProperty.class));
+
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("score", new BasicDBObject("$meta", "textScore")).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-973
+	 */
+	@Test
+	public void getMappedSortAppendsTextScoreProperlyWhenSortedByScore() {
+
+		Query query = new Query().with(new Sort("textScore"));
+
+		DBObject dbo = mapper
+				.getMappedSort(query.getSortObject(), context.getPersistentEntity(WithTextScoreProperty.class));
+
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("score", new BasicDBObject("$meta", "textScore")).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-973
+	 */
+	@Test
+	public void getMappedSortIgnoresTextScoreWhenNotSortedByScore() {
+
+		Query query = new Query().with(new Sort("id"));
+
+		DBObject dbo = mapper
+				.getMappedSort(query.getSortObject(), context.getPersistentEntity(WithTextScoreProperty.class));
+
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("_id", 1).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1070
+	 */
+	@Test
+	public void mapsIdReferenceToDBRefCorrectly() {
+
+		ObjectId id = new ObjectId();
+
+		DBObject query = new BasicDBObject("reference.id", new com.mongodb.DBRef("reference", id.toString()));
+		DBObject result = mapper.getMappedObject(query, context.getPersistentEntity(WithDBRef.class));
+
+		assertThat(result.containsField("reference"), is(true));
+		com.mongodb.DBRef reference = getTypedValue(result, "reference", com.mongodb.DBRef.class);
+		assertThat(reference.getId(), is(instanceOf(ObjectId.class)));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void shouldUseExplicitlySetFieldnameForIdPropertyCandidates() {
+
+		Query query = query(where("nested.id").is("bar"));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(),
+				context.getPersistentEntity(RootForClassWithExplicitlyRenamedIdField.class));
+
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("nested.id", "bar").get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1050
+	 */
+	@Test
+	public void shouldUseExplicitlySetFieldnameForIdPropertyCandidatesUsedInSortClause() {
+
+		Query query = new Query().with(new Sort("nested.id"));
+
+		DBObject dbo = mapper.getMappedSort(query.getSortObject(),
+				context.getPersistentEntity(RootForClassWithExplicitlyRenamedIdField.class));
+
+		assertThat(dbo, equalTo(new BasicDBObjectBuilder().add("nested.id", 1).get()));
+	}
+
+	/**
+	 * @see DATAMONGO-1135
+	 */
+	@Test
+	public void nearShouldUseGeoJsonRepresentationOnUnmappedProperty() {
+
+		Query query = query(where("foo").near(new GeoJsonPoint(100, 50)));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(ClassWithGeoTypes.class));
+
+		assertThat(dbo, isBsonObject().containing("foo.$near.$geometry.type", "Point"));
+		assertThat(dbo, isBsonObject().containing("foo.$near.$geometry.coordinates.[0]", 100D));
+		assertThat(dbo, isBsonObject().containing("foo.$near.$geometry.coordinates.[1]", 50D));
+	}
+
+	/**
+	 * @see DATAMONGO-1135
+	 */
+	@Test
+	public void nearShouldUseGeoJsonRepresentationWhenMappingToGoJsonType() {
+
+		Query query = query(where("geoJsonPoint").near(new GeoJsonPoint(100, 50)));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(ClassWithGeoTypes.class));
+
+		assertThat(dbo, isBsonObject().containing("geoJsonPoint.$near.$geometry.type", "Point"));
+	}
+
+	/**
+	 * @see DATAMONGO-1135
+	 */
+	@Test
+	public void nearSphereShouldUseGeoJsonRepresentationWhenMappingToGoJsonType() {
+
+		Query query = query(where("geoJsonPoint").nearSphere(new GeoJsonPoint(100, 50)));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(ClassWithGeoTypes.class));
+
+		assertThat(dbo, isBsonObject().containing("geoJsonPoint.$nearSphere.$geometry.type", "Point"));
+	}
+
+	/**
+	 * @see DATAMONGO-1135
+	 */
+	@Test
+	public void shouldMapNameCorrectlyForGeoJsonType() {
+
+		Query query = query(where("namedGeoJsonPoint").nearSphere(new GeoJsonPoint(100, 50)));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(ClassWithGeoTypes.class));
+
+		assertThat(dbo,
+				isBsonObject().containing("geoJsonPointWithNameViaFieldAnnotation.$nearSphere.$geometry.type", "Point"));
+	}
+
+	/**
+	 * @see DATAMONGO-1135
+	 */
+	@Test
+	public void withinShouldUseGeoJsonPolygonWhenMappingPolygonOn2DSphereIndex() {
+
+		Query query = query(where("geoJsonPoint").within(
+				new GeoJsonPolygon(new Point(0, 0), new Point(100, 100), new Point(100, 0), new Point(0, 0))));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(ClassWithGeoTypes.class));
+
+		assertThat(dbo, isBsonObject().containing("geoJsonPoint.$geoWithin.$geometry.type", "Polygon"));
+	}
+
+	/**
+	 * @see DATAMONGO-1134
+	 */
+	@Test
+	public void intersectsShouldUseGeoJsonRepresentationCorrectly() {
+
+		Query query = query(where("geoJsonPoint").intersects(
+				new GeoJsonPolygon(new Point(0, 0), new Point(100, 100), new Point(100, 0), new Point(0, 0))));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(), context.getPersistentEntity(ClassWithGeoTypes.class));
+
+		assertThat(dbo, isBsonObject().containing("geoJsonPoint.$geoIntersects.$geometry.type", "Polygon"));
+		assertThat(dbo, isBsonObject().containing("geoJsonPoint.$geoIntersects.$geometry.coordinates"));
+	}
+
+	/**
+	 * @see DATAMONGO-1269
+	 */
+	@Test
+	public void mappingShouldRetainNumericMapKey() {
+
+		Query query = query(where("map.1.stringProperty").is("ba'alzamon"));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(),
+				context.getPersistentEntity(EntityWithComplexValueTypeMap.class));
+
+		assertThat(dbo.containsField("map.1.stringProperty"), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-1269
+	 */
+	@Test
+	public void mappingShouldRetainNumericPositionInList() {
+
+		Query query = query(where("list.1.stringProperty").is("ba'alzamon"));
+
+		DBObject dbo = mapper.getMappedObject(query.getQueryObject(),
+				context.getPersistentEntity(EntityWithComplexValueTypeList.class));
+
+		assertThat(dbo.containsField("list.1.stringProperty"), is(true));
+	}
+
+	@Document
+	public class Foo {
+		@Id private ObjectId id;
+		EmbeddedClass embedded;
+	}
+
+	public class EmbeddedClass {
+		public String id;
+	}
+
 	class IdWrapper {
 		Object id;
+	}
+
+	class ClassWithEmbedded {
+		@Id String id;
+		Sample sample;
 	}
 
 	class ClassWithDefaultId {
@@ -627,5 +892,44 @@ public class QueryMapperUnitTests {
 	class WithMapDBRef {
 
 		@DBRef Map<String, Sample> mapWithDBRef;
+	}
+
+	class WithTextScoreProperty {
+
+		@Id String id;
+		@TextScore @Field("score") Float textScore;
+	}
+
+	static class RootForClassWithExplicitlyRenamedIdField {
+
+		@Id String id;
+		ClassWithExplicitlyRenamedField nested;
+	}
+
+	static class ClassWithExplicitlyRenamedField {
+
+		@Field("id") String id;
+	}
+
+	static class ClassWithGeoTypes {
+
+		double[] justAnArray;
+		Point legacyPoint;
+		GeoJsonPoint geoJsonPoint;
+		@Field("geoJsonPointWithNameViaFieldAnnotation") GeoJsonPoint namedGeoJsonPoint;
+	}
+
+	static class SimpeEntityWithoutId {
+
+		String stringProperty;
+		Integer integerProperty;
+	}
+
+	static class EntityWithComplexValueTypeMap {
+		Map<Integer, SimpeEntityWithoutId> map;
+	}
+
+	static class EntityWithComplexValueTypeList {
+		List<SimpeEntityWithoutId> list;
 	}
 }

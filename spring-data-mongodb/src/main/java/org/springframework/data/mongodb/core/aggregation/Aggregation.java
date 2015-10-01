@@ -1,5 +1,5 @@
 /*
- * Copyright 2013 the original author or authors.
+ * Copyright 2013-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import org.springframework.data.mongodb.core.aggregation.ExposedFields.ExposedFi
 import org.springframework.data.mongodb.core.aggregation.ExposedFields.FieldReference;
 import org.springframework.data.mongodb.core.aggregation.Fields.AggregationField;
 import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.SerializationUtils;
 import org.springframework.util.Assert;
 
@@ -44,9 +45,23 @@ import com.mongodb.DBObject;
  */
 public class Aggregation {
 
-	public static final AggregationOperationContext DEFAULT_CONTEXT = new NoOpAggregationOperationContext();
+	/**
+	 * References the root document, i.e. the top-level document, currently being processed in the aggregation pipeline
+	 * stage.
+	 */
+	public static final String ROOT = SystemVariable.ROOT.toString();
 
-	private final List<AggregationOperation> operations;
+	/**
+	 * References the start of the field path being processed in the aggregation pipeline stage. Unless documented
+	 * otherwise, all stages start with CURRENT the same as ROOT.
+	 */
+	public static final String CURRENT = SystemVariable.CURRENT.toString();
+
+	public static final AggregationOperationContext DEFAULT_CONTEXT = new NoOpAggregationOperationContext();
+	public static final AggregationOptions DEFAULT_OPTIONS = newAggregationOptions().build();
+
+	protected final List<AggregationOperation> operations;
+	private final AggregationOptions options;
 
 	/**
 	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
@@ -64,6 +79,20 @@ public class Aggregation {
 	 */
 	public static Aggregation newAggregation(AggregationOperation... operations) {
 		return new Aggregation(operations);
+	}
+
+	/**
+	 * Returns a copy of this {@link Aggregation} with the given {@link AggregationOptions} set. Note that options are
+	 * supported in MongoDB version 2.6+.
+	 * 
+	 * @param options must not be {@literal null}.
+	 * @return
+	 * @since 1.6
+	 */
+	public Aggregation withOptions(AggregationOptions options) {
+
+		Assert.notNull(options, "AggregationOptions must not be null.");
+		return new Aggregation(this.operations, options);
 	}
 
 	/**
@@ -92,11 +121,43 @@ public class Aggregation {
 	 * @param aggregationOperations must not be {@literal null} or empty.
 	 */
 	protected Aggregation(AggregationOperation... aggregationOperations) {
+		this(asAggregationList(aggregationOperations));
+	}
+
+	/**
+	 * @param aggregationOperations must not be {@literal null} or empty.
+	 * @return
+	 */
+	protected static List<AggregationOperation> asAggregationList(AggregationOperation... aggregationOperations) {
+
+		Assert.notEmpty(aggregationOperations, "AggregationOperations must not be null or empty!");
+
+		return Arrays.asList(aggregationOperations);
+	}
+
+	/**
+	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
+	 * 
+	 * @param aggregationOperations must not be {@literal null} or empty.
+	 */
+	protected Aggregation(List<AggregationOperation> aggregationOperations) {
+		this(aggregationOperations, DEFAULT_OPTIONS);
+	}
+
+	/**
+	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
+	 * 
+	 * @param aggregationOperations must not be {@literal null} or empty.
+	 * @param options must not be {@literal null} or empty.
+	 */
+	protected Aggregation(List<AggregationOperation> aggregationOperations, AggregationOptions options) {
 
 		Assert.notNull(aggregationOperations, "AggregationOperations must not be null!");
-		Assert.isTrue(aggregationOperations.length > 0, "At least one AggregationOperation has to be provided");
+		Assert.isTrue(aggregationOperations.size() > 0, "At least one AggregationOperation has to be provided");
+		Assert.notNull(options, "AggregationOptions must not be null!");
 
-		this.operations = Arrays.asList(aggregationOperations);
+		this.operations = aggregationOperations;
+		this.options = options;
 	}
 
 	/**
@@ -232,6 +293,29 @@ public class Aggregation {
 	}
 
 	/**
+	 * Creates a new {@link GeoNearOperation} instance from the given {@link NearQuery} and the{@code distanceField}. The
+	 * {@code distanceField} defines output field that contains the calculated distance.
+	 * 
+	 * @param query must not be {@literal null}.
+	 * @param distanceField must not be {@literal null} or empty.
+	 * @return
+	 * @since 1.7
+	 */
+	public static GeoNearOperation geoNear(NearQuery query, String distanceField) {
+		return new GeoNearOperation(query, distanceField);
+	}
+
+	/**
+	 * Returns a new {@link AggregationOptions.Builder}.
+	 * 
+	 * @return
+	 * @since 1.6
+	 */
+	public static AggregationOptions.Builder newAggregationOptions() {
+		return new AggregationOptions.Builder();
+	}
+
+	/**
 	 * Converts this {@link Aggregation} specification to a {@link DBObject}.
 	 * 
 	 * @param inputCollectionName the name of the input collection
@@ -248,12 +332,14 @@ public class Aggregation {
 
 			if (operation instanceof FieldsExposingAggregationOperation) {
 				FieldsExposingAggregationOperation exposedFieldsOperation = (FieldsExposingAggregationOperation) operation;
-				context = new ExposedFieldsAggregationOperationContext(exposedFieldsOperation.getFields());
+				context = new ExposedFieldsAggregationOperationContext(exposedFieldsOperation.getFields(), rootContext);
 			}
 		}
 
 		DBObject command = new BasicDBObject("aggregate", inputCollectionName);
 		command.put("pipeline", operationDocuments);
+
+		command = options.applyAndReturnPotentiallyChangedCommand(command);
 
 		return command;
 	}
@@ -300,6 +386,53 @@ public class Aggregation {
 		@Override
 		public FieldReference getReference(String name) {
 			return new FieldReference(new ExposedField(new AggregationField(name), true));
+		}
+	}
+
+	/**
+	 * Describes the system variables available in MongoDB aggregation framework pipeline expressions.
+	 * 
+	 * @author Thomas Darimont
+	 * @see http://docs.mongodb.org/manual/reference/aggregation-variables
+	 */
+	enum SystemVariable {
+
+		ROOT, CURRENT;
+
+		private static final String PREFIX = "$$";
+
+		/**
+		 * Return {@literal true} if the given {@code fieldRef} denotes a well-known system variable, {@literal false}
+		 * otherwise.
+		 * 
+		 * @param fieldRef may be {@literal null}.
+		 * @return
+		 */
+		public static boolean isReferingToSystemVariable(String fieldRef) {
+
+			if (fieldRef == null || !fieldRef.startsWith(PREFIX) || fieldRef.length() <= 2) {
+				return false;
+			}
+
+			int indexOfFirstDot = fieldRef.indexOf('.');
+			String candidate = fieldRef.substring(2, indexOfFirstDot == -1 ? fieldRef.length() : indexOfFirstDot);
+
+			for (SystemVariable value : values()) {
+				if (value.name().equals(candidate)) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see java.lang.Enum#toString()
+		 */
+		@Override
+		public String toString() {
+			return PREFIX.concat(name());
 		}
 	}
 }

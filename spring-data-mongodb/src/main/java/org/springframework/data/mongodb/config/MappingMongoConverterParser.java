@@ -30,6 +30,7 @@ import org.springframework.beans.factory.config.BeanDefinitionHolder;
 import org.springframework.beans.factory.config.RuntimeBeanReference;
 import org.springframework.beans.factory.parsing.BeanComponentDefinition;
 import org.springframework.beans.factory.parsing.CompositeComponentDefinition;
+import org.springframework.beans.factory.parsing.ReaderContext;
 import org.springframework.beans.factory.support.AbstractBeanDefinition;
 import org.springframework.beans.factory.support.BeanDefinitionBuilder;
 import org.springframework.beans.factory.support.BeanDefinitionRegistry;
@@ -51,10 +52,10 @@ import org.springframework.core.type.filter.TypeFilter;
 import org.springframework.data.annotation.Persistent;
 import org.springframework.data.config.BeanComponentDefinitionBuilder;
 import org.springframework.data.mapping.context.MappingContextIsNewStrategyFactory;
+import org.springframework.data.mapping.model.CamelCaseAbbreviatingFieldNamingStrategy;
 import org.springframework.data.mongodb.core.convert.CustomConversions;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
 import org.springframework.data.mongodb.core.index.MongoPersistentEntityIndexCreator;
-import org.springframework.data.mongodb.core.mapping.CamelCaseAbbreviatingFieldNamingStrategy;
 import org.springframework.data.mongodb.core.mapping.Document;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
 import org.springframework.data.mongodb.core.mapping.event.ValidatingMongoEventListener;
@@ -71,6 +72,7 @@ import org.w3c.dom.Element;
  * @author Oliver Gierke
  * @author Maciej Walkowiak
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 public class MappingMongoConverterParser implements BeanDefinitionParser {
 
@@ -83,8 +85,11 @@ public class MappingMongoConverterParser implements BeanDefinitionParser {
 	 */
 	public BeanDefinition parse(Element element, ParserContext parserContext) {
 
-		BeanDefinitionRegistry registry = parserContext.getRegistry();
+		if (parserContext.isNested()) {
+			parserContext.getReaderContext().error("Mongo Converter must not be defined as nested bean.", element);
+		}
 
+		BeanDefinitionRegistry registry = parserContext.getRegistry();
 		String id = element.getAttribute(AbstractBeanDefinitionParser.ID_ATTRIBUTE);
 		id = StringUtils.hasText(id) ? id : DEFAULT_CONVERTER_BEAN_NAME;
 
@@ -209,17 +214,41 @@ public class MappingMongoConverterParser implements BeanDefinitionParser {
 			mappingContextBuilder.addPropertyValue("simpleTypeHolder", simpleTypesDefinition);
 		}
 
-		String abbreviateFieldNames = element.getAttribute("abbreviate-field-names");
-		if ("true".equals(abbreviateFieldNames)) {
-			mappingContextBuilder.addPropertyValue("fieldNamingStrategy", new RootBeanDefinition(
-					CamelCaseAbbreviatingFieldNamingStrategy.class));
-		}
+		parseFieldNamingStrategy(element, parserContext.getReaderContext(), mappingContextBuilder);
 
 		ctxRef = converterId == null || DEFAULT_CONVERTER_BEAN_NAME.equals(converterId) ? MAPPING_CONTEXT_BEAN_NAME
 				: converterId + "." + MAPPING_CONTEXT_BEAN_NAME;
 
 		parserContext.registerBeanComponent(componentDefinitionBuilder.getComponent(mappingContextBuilder, ctxRef));
 		return ctxRef;
+	}
+
+	private static void parseFieldNamingStrategy(Element element, ReaderContext context, BeanDefinitionBuilder builder) {
+
+		String abbreviateFieldNames = element.getAttribute("abbreviate-field-names");
+		String fieldNamingStrategy = element.getAttribute("field-naming-strategy-ref");
+
+		boolean fieldNamingStrategyReferenced = StringUtils.hasText(fieldNamingStrategy);
+		boolean abbreviationActivated = StringUtils.hasText(abbreviateFieldNames)
+				&& Boolean.parseBoolean(abbreviateFieldNames);
+
+		if (fieldNamingStrategyReferenced && abbreviationActivated) {
+			context.error("Field name abbreviation cannot be activated if a field-naming-strategy-ref is configured!",
+					element);
+			return;
+		}
+
+		Object value = null;
+
+		if ("true".equals(abbreviateFieldNames)) {
+			value = new RootBeanDefinition(CamelCaseAbbreviatingFieldNamingStrategy.class);
+		} else if (fieldNamingStrategyReferenced) {
+			value = new RuntimeBeanReference(fieldNamingStrategy);
+		}
+
+		if (value != null) {
+			builder.addPropertyValue("fieldNamingStrategy", value);
+		}
 	}
 
 	private BeanDefinition getCustomConversions(Element element, ParserContext parserContext) {

@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,7 +27,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mapping.Association;
 import org.springframework.data.mapping.model.AnnotationBasedPersistentProperty;
+import org.springframework.data.mapping.model.FieldNamingStrategy;
 import org.springframework.data.mapping.model.MappingException;
+import org.springframework.data.mapping.model.PropertyNameFieldNamingStrategy;
 import org.springframework.data.mapping.model.SimpleTypeHolder;
 import org.springframework.util.StringUtils;
 
@@ -39,6 +41,7 @@ import com.mongodb.DBObject;
  * @author Oliver Gierke
  * @author Patryk Wasik
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 public class BasicMongoPersistentProperty extends AnnotationBasedPersistentProperty<MongoPersistentProperty> implements
 		MongoPersistentProperty {
@@ -46,6 +49,7 @@ public class BasicMongoPersistentProperty extends AnnotationBasedPersistentPrope
 	private static final Logger LOG = LoggerFactory.getLogger(BasicMongoPersistentProperty.class);
 
 	private static final String ID_FIELD_NAME = "_id";
+	private static final String LANGUAGE_FIELD_NAME = "language";
 	private static final Set<Class<?>> SUPPORTED_ID_TYPES = new HashSet<Class<?>>();
 	private static final Set<String> SUPPORTED_ID_PROPERTY_NAMES = new HashSet<String>();
 
@@ -96,7 +100,8 @@ public class BasicMongoPersistentProperty extends AnnotationBasedPersistentPrope
 		}
 
 		// We need to support a wider range of ID types than just the ones that can be converted to an ObjectId
-		return SUPPORTED_ID_PROPERTY_NAMES.contains(getName());
+		// but still we need to check if there happens to be an explicit name set
+		return SUPPORTED_ID_PROPERTY_NAMES.contains(getName()) && !hasExplicitFieldName();
 	}
 
 	/*
@@ -130,10 +135,8 @@ public class BasicMongoPersistentProperty extends AnnotationBasedPersistentPrope
 			}
 		}
 
-		org.springframework.data.mongodb.core.mapping.Field annotation = findAnnotation(org.springframework.data.mongodb.core.mapping.Field.class);
-
-		if (annotation != null && StringUtils.hasText(annotation.value())) {
-			return annotation.value();
+		if (hasExplicitFieldName()) {
+			return getAnnotatedFieldName();
 		}
 
 		String fieldName = fieldNamingStrategy.getFieldName(this);
@@ -144,6 +147,26 @@ public class BasicMongoPersistentProperty extends AnnotationBasedPersistentPrope
 		}
 
 		return fieldName;
+	}
+
+	/**
+	 * @return true if {@link org.springframework.data.mongodb.core.mapping.Field} having non blank
+	 *         {@link org.springframework.data.mongodb.core.mapping.Field#value()} present.
+	 * @since 1.7
+	 */
+	protected boolean hasExplicitFieldName() {
+		return StringUtils.hasText(getAnnotatedFieldName());
+	}
+
+	private String getAnnotatedFieldName() {
+
+		org.springframework.data.mongodb.core.mapping.Field annotation = findAnnotation(org.springframework.data.mongodb.core.mapping.Field.class);
+
+		if (annotation != null && StringUtils.hasText(annotation.value())) {
+			return annotation.value();
+		}
+
+		return null;
 	}
 
 	/*
@@ -178,5 +201,32 @@ public class BasicMongoPersistentProperty extends AnnotationBasedPersistentPrope
 	 */
 	public DBRef getDBRef() {
 		return findAnnotation(DBRef.class);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentProperty#isLanguageProperty()
+	 */
+	@Override
+	public boolean isLanguageProperty() {
+		return getFieldName().equals(LANGUAGE_FIELD_NAME) || isExplicitLanguageProperty();
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentProperty#isExplicitLanguageProperty()
+	 */
+	@Override
+	public boolean isExplicitLanguageProperty() {
+		return isAnnotationPresent(Language.class);
+	};
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentProperty#isTextScoreProperty()
+	 */
+	@Override
+	public boolean isTextScoreProperty() {
+		return isAnnotationPresent(TextScore.class);
 	}
 }

@@ -15,10 +15,11 @@
  */
 package org.springframework.data.mongodb.core.query;
 
+import static org.springframework.util.ObjectUtils.*;
+
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,6 +41,7 @@ import com.mongodb.DBObject;
  * @author Oliver Gierke
  * @author Becca Gaspard
  * @author Christoph Strobl
+ * @author Thomas Darimont
  */
 public class Update {
 
@@ -62,7 +64,7 @@ public class Update {
 	}
 
 	/**
-	 * Creates an {@link Update} instance from the given {@link DBObject}. Allows to explicitly exlude fields from making
+	 * Creates an {@link Update} instance from the given {@link DBObject}. Allows to explicitly exclude fields from making
 	 * it into the created {@link Update} object. Note, that this will set attributes directly and <em>not</em> use
 	 * {@literal $set}. This means fields not given in the {@link DBObject} will be nulled when executing the update. To
 	 * create an only-updating {@link Update} instance of a {@link DBObject}, call {@link #set(String, Object)} for each
@@ -161,7 +163,8 @@ public class Update {
 
 	/**
 	 * Update using {@code $push} modifier. <br/>
-	 * Allows creation of {@code $push} command for single or multiple (using {@code $each}) values.
+	 * Allows creation of {@code $push} command for single or multiple (using {@code $each}) values as well as using
+	 * {@code $position}.
 	 * 
 	 * @see http://docs.mongodb.org/manual/reference/operator/update/push/
 	 * @see http://docs.mongodb.org/manual/reference/operator/update/each/
@@ -187,13 +190,20 @@ public class Update {
 	 * @return
 	 */
 	public Update pushAll(String key, Object[] values) {
-
-		Object[] convertedValues = new Object[values.length];
-		for (int i = 0; i < values.length; i++) {
-			convertedValues[i] = values[i];
-		}
-		addMultiFieldOperation("$pushAll", key, convertedValues);
+		addMultiFieldOperation("$pushAll", key, Arrays.copyOf(values, values.length));
 		return this;
+	}
+
+	/**
+	 * Update using {@code $addToSet} modifier. <br/>
+	 * Allows creation of {@code $push} command for single or multiple (using {@code $each}) values
+	 * 
+	 * @param key
+	 * @return
+	 * @since 1.5
+	 */
+	public AddToSetBuilder addToSet(String key) {
+		return new AddToSetBuilder(key);
 	}
 
 	/**
@@ -244,12 +254,7 @@ public class Update {
 	 * @return
 	 */
 	public Update pullAll(String key, Object[] values) {
-
-		Object[] convertedValues = new Object[values.length];
-		for (int i = 0; i < values.length; i++) {
-			convertedValues[i] = values[i];
-		}
-		addFieldOperation("$pullAll", key, convertedValues);
+		addFieldOperation("$pullAll", key, Arrays.copyOf(values, values.length));
 		return this;
 	}
 
@@ -266,7 +271,63 @@ public class Update {
 		return this;
 	}
 
+	/**
+	 * Update given key to current date using {@literal $currentDate} modifier.
+	 * 
+	 * @see http://docs.mongodb.org/manual/reference/operator/update/currentDate/
+	 * @param key
+	 * @return
+	 * @since 1.6
+	 */
+	public Update currentDate(String key) {
+
+		addMultiFieldOperation("$currentDate", key, true);
+		return this;
+	}
+
+	/**
+	 * Update given key to current date using {@literal $currentDate : &#123; $type : "timestamp" &#125;} modifier.
+	 * 
+	 * @see http://docs.mongodb.org/manual/reference/operator/update/currentDate/
+	 * @param key
+	 * @return
+	 * @since 1.6
+	 */
+	public Update currentTimestamp(String key) {
+
+		addMultiFieldOperation("$currentDate", key, new BasicDBObject("$type", "timestamp"));
+		return this;
+	}
+
+	/**
+	 * Multiply the value of given key by the given number.
+	 * 
+	 * @see http://docs.mongodb.org/manual/reference/operator/update/mul/
+	 * @param key must not be {@literal null}.
+	 * @param multiplier must not be {@literal null}.
+	 * @return
+	 * @since 1.7
+	 */
+	public Update multiply(String key, Number multiplier) {
+
+		Assert.notNull(multiplier, "Multiplier must not be 'null'.");
+		addMultiFieldOperation("$mul", key, multiplier.doubleValue());
+		return this;
+	}
+
+	/**
+	 * The operator supports bitwise {@code and}, bitwise {@code or}, and bitwise {@code xor} operations.
+	 * 
+	 * @param key
+	 * @return
+	 * @since 1.7
+	 */
+	public BitwiseOperatorBuilder bitwise(String key) {
+		return new BitwiseOperatorBuilder(this, key);
+	}
+
 	public DBObject getUpdateObject() {
+
 		DBObject dbo = new BasicDBObject();
 		for (String k : modifierOps.keySet()) {
 			dbo.put(k, modifierOps.get(k));
@@ -323,14 +384,52 @@ public class Update {
 		return StringUtils.startsWithIgnoreCase(key, "$");
 	}
 
+	/* 
+	 * (non-Javadoc)
+	 * @see java.lang.Object#hashCode()
+	 */
+	@Override
+	public int hashCode() {
+		return getUpdateObject().hashCode();
+	}
+
+	/* 
+	 * (non-Javadoc)
+	 * @see java.lang.Object#equals(java.lang.Object)
+	 */
+	@Override
+	public boolean equals(Object obj) {
+
+		if (this == obj) {
+			return true;
+		}
+
+		if (obj == null || getClass() != obj.getClass()) {
+			return false;
+		}
+
+		Update that = (Update) obj;
+		return this.getUpdateObject().equals(that.getUpdateObject());
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see java.lang.Object#toString()
+	 */
+	@Override
+	public String toString() {
+		return SerializationUtils.serializeToJsonSafely(getUpdateObject());
+	}
+
 	/**
 	 * Modifiers holds a distinct collection of {@link Modifier}
 	 * 
 	 * @author Christoph Strobl
+	 * @author Thomas Darimont
 	 */
 	public static class Modifiers {
 
-		private HashMap<String, Modifier> modifiers;
+		private Map<String, Modifier> modifiers;
 
 		public Modifiers() {
 			this.modifiers = new LinkedHashMap<String, Modifier>(1);
@@ -342,6 +441,33 @@ public class Update {
 
 		public void addModifier(Modifier modifier) {
 			this.modifiers.put(modifier.getKey(), modifier);
+		}
+
+		/* (non-Javadoc)
+		 * @see java.lang.Object#hashCode()
+		 */
+		@Override
+		public int hashCode() {
+			return nullSafeHashCode(modifiers);
+		}
+
+		/* (non-Javadoc)
+		 * @see java.lang.Object#equals(java.lang.Object)
+		 */
+		@Override
+		public boolean equals(Object obj) {
+
+			if (this == obj) {
+				return true;
+			}
+
+			if (obj == null || getClass() != obj.getClass()) {
+				return false;
+			}
+
+			Modifiers that = (Modifiers) obj;
+
+			return this.modifiers.equals(that.modifiers);
 		}
 	}
 
@@ -367,6 +493,7 @@ public class Update {
 	 * Implementation of {@link Modifier} representing {@code $each}.
 	 * 
 	 * @author Christoph Strobl
+	 * @author Thomas Darimont
 	 */
 	private static class Each implements Modifier {
 
@@ -386,29 +513,85 @@ public class Update {
 				return ((Collection<?>) values[0]).toArray();
 			}
 
-			Object[] convertedValues = new Object[values.length];
-			for (int i = 0; i < values.length; i++) {
-				convertedValues[i] = values[i];
-			}
-
-			return convertedValues;
+			return Arrays.copyOf(values, values.length);
 		}
 
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.core.query.Update.Modifier#getKey()
+		 */
 		@Override
 		public String getKey() {
 			return "$each";
 		}
 
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.core.query.Update.Modifier#getValue()
+		 */
 		@Override
 		public Object getValue() {
 			return this.values;
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see java.lang.Object#hashCode()
+		 */
+		@Override
+		public int hashCode() {
+			return nullSafeHashCode(values);
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see java.lang.Object#equals(java.lang.Object)
+		 */
+		@Override
+		public boolean equals(Object that) {
+
+			if (this == that) {
+				return true;
+			}
+
+			if (that == null || getClass() != that.getClass()) {
+				return false;
+			}
+
+			return nullSafeEquals(values, ((Each) that).values);
+		}
+	}
+
+	/**
+	 * {@link Modifier} implementation used to propagate {@code $position}.
+	 * 
+	 * @author Christoph Strobl
+	 * @since 1.7
+	 */
+	private static class PositionModifier implements Modifier {
+
+		private final int position;
+
+		public PositionModifier(int position) {
+			this.position = position;
+		}
+
+		@Override
+		public String getKey() {
+			return "$position";
+		}
+
+		@Override
+		public Object getValue() {
+			return position;
 		}
 	}
 
 	/**
 	 * Builder for creating {@code $push} modifiers
 	 * 
-	 * @author Christop Strobl
+	 * @author Christoph Strobl
+	 * @author Thomas Darimont
 	 */
 	public class PushOperatorBuilder {
 
@@ -433,6 +616,42 @@ public class Update {
 		}
 
 		/**
+		 * Forces values to be added at the given {@literal position}.
+		 * 
+		 * @param position needs to be greater than or equal to zero.
+		 * @return
+		 * @since 1.7
+		 */
+		public PushOperatorBuilder atPosition(int position) {
+
+			if (position < 0) {
+				throw new IllegalArgumentException("Position must be greater than or equal to zero.");
+			}
+
+			this.modifiers.addModifier(new PositionModifier(position));
+
+			return this;
+		}
+
+		/**
+		 * Forces values to be added at given {@literal position}.
+		 * 
+		 * @param position can be {@literal null} which will be appended at the last position.
+		 * @return
+		 * @since 1.7
+		 */
+		public PushOperatorBuilder atPosition(Position position) {
+
+			if (position == null || Position.LAST.equals(position)) {
+				return this;
+			}
+
+			this.modifiers.addModifier(new PositionModifier(0));
+
+			return this;
+		}
+
+		/**
 		 * Propagates {@link #value(Object)} to {@code $push}
 		 * 
 		 * @param values
@@ -440,6 +659,160 @@ public class Update {
 		 */
 		public Update value(Object value) {
 			return Update.this.push(key, value);
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see java.lang.Object#hashCode()
+		 */
+		@Override
+		public int hashCode() {
+
+			int result = 17;
+
+			result += 31 * result + getOuterType().hashCode();
+			result += 31 * result + nullSafeHashCode(key);
+			result += 31 * result + nullSafeHashCode(modifiers);
+
+			return result;
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see java.lang.Object#equals(java.lang.Object)
+		 */
+		@Override
+		public boolean equals(Object obj) {
+
+			if (this == obj) {
+				return true;
+			}
+
+			if (obj == null || getClass() != obj.getClass()) {
+				return false;
+			}
+
+			PushOperatorBuilder that = (PushOperatorBuilder) obj;
+
+			if (!getOuterType().equals(that.getOuterType())) {
+				return false;
+			}
+
+			return nullSafeEquals(this.key, that.key) && nullSafeEquals(this.modifiers, that.modifiers);
+		}
+
+		private Update getOuterType() {
+			return Update.this;
+		}
+	}
+
+	/**
+	 * Builder for creating {@code $addToSet} modifier.
+	 * 
+	 * @author Christoph Strobl
+	 * @since 1.5
+	 */
+	public class AddToSetBuilder {
+
+		private final String key;
+
+		public AddToSetBuilder(String key) {
+			this.key = key;
+		}
+
+		/**
+		 * Propagates {@code $each} to {@code $addToSet}
+		 * 
+		 * @param values
+		 * @return
+		 */
+		public Update each(Object... values) {
+			return Update.this.addToSet(this.key, new Each(values));
+		}
+
+		/**
+		 * Propagates {@link #value(Object)} to {@code $addToSet}
+		 * 
+		 * @param values
+		 * @return
+		 */
+		public Update value(Object value) {
+			return Update.this.addToSet(this.key, value);
+		}
+	}
+
+	/**
+	 * @author Christoph Strobl
+	 * @since 1.7
+	 */
+	public static class BitwiseOperatorBuilder {
+
+		private final String key;
+		private final Update reference;
+		private static final String BIT_OPERATOR = "$bit";
+
+		private enum BitwiseOperator {
+			AND, OR, XOR;
+
+			@Override
+			public String toString() {
+				return super.toString().toLowerCase();
+			};
+		}
+
+		/**
+		 * Creates a new {@link BitwiseOperatorBuilder}.
+		 * 
+		 * @param reference must not be {@literal null}
+		 * @param key must not be {@literal null}
+		 */
+		protected BitwiseOperatorBuilder(Update reference, String key) {
+
+			Assert.notNull(reference, "Reference must not be null!");
+			Assert.notNull(key, "Key must not be null!");
+
+			this.reference = reference;
+			this.key = key;
+		}
+
+		/**
+		 * Updates to the result of a bitwise and operation between the current value and the given one.
+		 * 
+		 * @param value
+		 * @return
+		 */
+		public Update and(long value) {
+
+			addFieldOperation(BitwiseOperator.AND, value);
+			return reference;
+		}
+
+		/**
+		 * Updates to the result of a bitwise or operation between the current value and the given one.
+		 * 
+		 * @param value
+		 * @return
+		 */
+		public Update or(long value) {
+
+			addFieldOperation(BitwiseOperator.OR, value);
+			return reference;
+		}
+
+		/**
+		 * Updates to the result of a bitwise xor operation between the current value and the given one.
+		 * 
+		 * @param value
+		 * @return
+		 */
+		public Update xor(long value) {
+
+			addFieldOperation(BitwiseOperator.XOR, value);
+			return reference;
+		}
+
+		private void addFieldOperation(BitwiseOperator operator, Number value) {
+			reference.addMultiFieldOperation(BIT_OPERATOR, key, new BasicDBObject(operator.toString(), value));
 		}
 	}
 }

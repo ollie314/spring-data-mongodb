@@ -88,7 +88,7 @@ public final class ExposedFields implements Iterable<ExposedField> {
 	}
 
 	/**
-	 * Creates a new {@link ExposedFields} instance for the given fields in either sythetic or non-synthetic way.
+	 * Creates a new {@link ExposedFields} instance for the given fields in either synthetic or non-synthetic way.
 	 * 
 	 * @param fields must not be {@literal null}.
 	 * @param synthetic
@@ -107,7 +107,7 @@ public final class ExposedFields implements Iterable<ExposedField> {
 	}
 
 	/**
-	 * Creates a new {@link ExposedFields} with the given orignals and synthetics.
+	 * Creates a new {@link ExposedFields} with the given originals and synthetics.
 	 * 
 	 * @param originals must not be {@literal null}.
 	 * @param synthetic must not be {@literal null}.
@@ -269,13 +269,20 @@ public final class ExposedFields implements Iterable<ExposedField> {
 		}
 
 		/**
+		 * @return the synthetic
+		 */
+		public boolean isSynthetic() {
+			return synthetic;
+		}
+
+		/**
 		 * Returns whether the field can be referred to using the given name.
 		 * 
-		 * @param input
+		 * @param name
 		 * @return
 		 */
-		public boolean canBeReferredToBy(String input) {
-			return getTarget().equals(input);
+		public boolean canBeReferredToBy(String name) {
+			return getName().equals(name) || getTarget().equals(name);
 		}
 
 		/*
@@ -340,6 +347,7 @@ public final class ExposedFields implements Iterable<ExposedField> {
 		public FieldReference(ExposedField field) {
 
 			Assert.notNull(field, "ExposedField must not be null!");
+
 			this.field = field;
 		}
 
@@ -355,7 +363,7 @@ public final class ExposedFields implements Iterable<ExposedField> {
 		}
 
 		/**
-		 * Returns the referenve value for the given field reference. Will return 1 for a synthetic, unaliased field or the
+		 * Returns the reference value for the given field reference. Will return 1 for a synthetic, unaliased field or the
 		 * raw rendering of the reference otherwise.
 		 * 
 		 * @return

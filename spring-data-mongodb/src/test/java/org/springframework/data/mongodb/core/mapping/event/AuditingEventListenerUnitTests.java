@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2014 the original author or authors.
+ * Copyright 2012-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,8 @@ package org.springframework.data.mongodb.core.mapping.event;
 import static org.mockito.Matchers.*;
 import static org.mockito.Mockito.*;
 
+import java.util.Arrays;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -27,9 +29,8 @@ import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectFactory;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.auditing.IsNewAwareAuditingHandler;
-import org.springframework.data.mapping.context.MappingContextIsNewStrategyFactory;
+import org.springframework.data.mapping.context.PersistentEntities;
 import org.springframework.data.mongodb.core.mapping.MongoMappingContext;
-import org.springframework.data.support.IsNewStrategyFactory;
 
 /**
  * Unit tests for {@link AuditingEventListener}.
@@ -41,17 +42,15 @@ import org.springframework.data.support.IsNewStrategyFactory;
 public class AuditingEventListenerUnitTests {
 
 	IsNewAwareAuditingHandler handler;
-
-	IsNewStrategyFactory factory;
 	AuditingEventListener listener;
 
 	@Before
 	public void setUp() {
 
 		MongoMappingContext mappingContext = new MongoMappingContext();
-		factory = new MappingContextIsNewStrategyFactory(mappingContext);
+		mappingContext.getPersistentEntity(Sample.class);
 
-		handler = spy(new IsNewAwareAuditingHandler(factory));
+		handler = spy(new IsNewAwareAuditingHandler(new PersistentEntities(Arrays.asList(mappingContext))));
 		doNothing().when(handler).markCreated(Mockito.any(Object.class));
 		doNothing().when(handler).markModified(Mockito.any(Object.class));
 
@@ -79,7 +78,7 @@ public class AuditingEventListenerUnitTests {
 	public void triggersCreationMarkForObjectWithEmptyId() {
 
 		Sample sample = new Sample();
-		listener.onApplicationEvent(new BeforeConvertEvent<Object>(sample));
+		listener.onApplicationEvent(new BeforeConvertEvent<Object>(sample, "collection-1"));
 
 		verify(handler, times(1)).markCreated(sample);
 		verify(handler, times(0)).markModified(any(Sample.class));
@@ -93,7 +92,7 @@ public class AuditingEventListenerUnitTests {
 
 		Sample sample = new Sample();
 		sample.id = "id";
-		listener.onApplicationEvent(new BeforeConvertEvent<Object>(sample));
+		listener.onApplicationEvent(new BeforeConvertEvent<Object>(sample, "collection-1"));
 
 		verify(handler, times(0)).markCreated(any(Sample.class));
 		verify(handler, times(1)).markModified(sample);

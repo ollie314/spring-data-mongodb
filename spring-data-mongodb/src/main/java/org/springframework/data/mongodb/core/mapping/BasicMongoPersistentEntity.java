@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2014 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 package org.springframework.data.mongodb.core.mapping;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
@@ -35,9 +36,11 @@ import org.springframework.data.mongodb.MongoCollectionUtils;
 import org.springframework.data.util.TypeInformation;
 import org.springframework.expression.Expression;
 import org.springframework.expression.ParserContext;
+import org.springframework.expression.common.LiteralExpression;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 import org.springframework.expression.spel.support.StandardEvaluationContext;
 import org.springframework.util.Assert;
+import org.springframework.util.ClassUtils;
 import org.springframework.util.StringUtils;
 
 /**
@@ -47,36 +50,45 @@ import org.springframework.util.StringUtils;
  * @author Jon Brisbin
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 public class BasicMongoPersistentEntity<T> extends BasicPersistentEntity<T, MongoPersistentProperty> implements
 		MongoPersistentEntity<T>, ApplicationContextAware {
 
-	private static final String AMBIGUOUS_FIELD_MAPPING = "Ambiguous field mapping detected! Both %s and %s map to the same field name %s! Disambiguate using @DocumentField annotation!";
+	private static final String AMBIGUOUS_FIELD_MAPPING = "Ambiguous field mapping detected! Both %s and %s map to the same field name %s! Disambiguate using @Field annotation!";
+	private static final SpelExpressionParser PARSER = new SpelExpressionParser();
+
 	private final String collection;
-	private final SpelExpressionParser parser;
+	private final String language;
+
 	private final StandardEvaluationContext context;
+	private final Expression expression;
 
 	/**
 	 * Creates a new {@link BasicMongoPersistentEntity} with the given {@link TypeInformation}. Will default the
 	 * collection name to the entities simple type name.
 	 * 
-	 * @param typeInformation
+	 * @param typeInformation must not be {@literal null}.
 	 */
 	public BasicMongoPersistentEntity(TypeInformation<T> typeInformation) {
 
 		super(typeInformation, MongoPersistentPropertyComparator.INSTANCE);
 
-		this.parser = new SpelExpressionParser();
-		this.context = new StandardEvaluationContext();
-
 		Class<?> rawType = typeInformation.getType();
 		String fallback = MongoCollectionUtils.getPreferredCollectionName(rawType);
 
-		if (rawType.isAnnotationPresent(Document.class)) {
-			Document d = rawType.getAnnotation(Document.class);
-			this.collection = StringUtils.hasText(d.collection()) ? d.collection() : fallback;
+		Document document = rawType.getAnnotation(Document.class);
+
+		this.expression = detectExpression(document);
+		this.context = new StandardEvaluationContext();
+
+		if (document != null) {
+
+			this.collection = StringUtils.hasText(document.collection()) ? document.collection() : fallback;
+			this.language = StringUtils.hasText(document.language()) ? document.language() : "";
 		} else {
 			this.collection = fallback;
+			this.language = "";
 		}
 	}
 
@@ -96,8 +108,34 @@ public class BasicMongoPersistentEntity<T> extends BasicPersistentEntity<T, Mong
 	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentEntity#getCollection()
 	 */
 	public String getCollection() {
-		Expression expression = parser.parseExpression(collection, ParserContext.TEMPLATE_EXPRESSION);
-		return expression.getValue(context, String.class);
+		return expression == null ? collection : expression.getValue(context, String.class);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentEntity#getLanguage()
+	 */
+	@Override
+	public String getLanguage() {
+		return this.language;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentEntity#getTextScoreProperty()
+	 */
+	@Override
+	public MongoPersistentProperty getTextScoreProperty() {
+		return getPersistentProperty(TextScore.class);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.mapping.MongoPersistentEntity#hasTextScoreProperty()
+	 */
+	@Override
+	public boolean hasTextScoreProperty() {
+		return getTextScoreProperty() != null;
 	}
 
 	/* 
@@ -107,10 +145,20 @@ public class BasicMongoPersistentEntity<T> extends BasicPersistentEntity<T, Mong
 	@Override
 	public void verify() {
 
+		verifyFieldUniqueness();
+		verifyFieldTypes();
+	}
+
+	private void verifyFieldUniqueness() {
+
 		AssertFieldNameUniquenessHandler handler = new AssertFieldNameUniquenessHandler();
 
 		doWithProperties(handler);
 		doWithAssociations(handler);
+	}
+
+	private void verifyFieldTypes() {
+		doWithProperties(new PropertyTypeAssertionHandler());
 	}
 
 	/**
@@ -195,6 +243,31 @@ public class BasicMongoPersistentEntity<T> extends BasicPersistentEntity<T, Mong
 	}
 
 	/**
+	 * Returns a SpEL {@link Expression} frór the collection String expressed in the given {@link Document} annotation if
+	 * present or {@literal null} otherwise. Will also return {@literal null} it the collection {@link String} evaluates
+	 * to a {@link LiteralExpression} (indicating that no subsequent evaluation is necessary).
+	 * 
+	 * @param document can be {@literal null}
+	 * @return
+	 */
+	private static Expression detectExpression(Document document) {
+
+		if (document == null) {
+			return null;
+		}
+
+		String collection = document.collection();
+
+		if (!StringUtils.hasText(collection)) {
+			return null;
+		}
+
+		Expression expression = PARSER.parseExpression(document.collection(), ParserContext.TEMPLATE_EXPRESSION);
+
+		return expression instanceof LiteralExpression ? null : expression;
+	}
+
+	/**
 	 * Handler to collect {@link MongoPersistentProperty} instances and check that each of them is mapped to a distinct
 	 * field name.
 	 * 
@@ -224,6 +297,63 @@ public class BasicMongoPersistentEntity<T> extends BasicPersistentEntity<T, Mong
 			}
 
 			properties.put(fieldName, property);
+		}
+	}
+
+	/**
+	 * @author Christoph Strobl
+	 * @since 1.6
+	 */
+	private static class PropertyTypeAssertionHandler implements PropertyHandler<MongoPersistentProperty> {
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mapping.PropertyHandler#doWithPersistentProperty(org.springframework.data.mapping.PersistentProperty)
+		 */
+		@Override
+		public void doWithPersistentProperty(MongoPersistentProperty persistentProperty) {
+
+			potentiallyAssertTextScoreType(persistentProperty);
+			potentiallyAssertLanguageType(persistentProperty);
+			potentiallyAssertDBRefTargetType(persistentProperty);
+		}
+
+		private static void potentiallyAssertLanguageType(MongoPersistentProperty persistentProperty) {
+
+			if (persistentProperty.isExplicitLanguageProperty()) {
+				assertPropertyType(persistentProperty, String.class);
+			}
+		}
+
+		private static void potentiallyAssertTextScoreType(MongoPersistentProperty persistentProperty) {
+
+			if (persistentProperty.isTextScoreProperty()) {
+				assertPropertyType(persistentProperty, Float.class, Double.class);
+			}
+		}
+
+		private static void potentiallyAssertDBRefTargetType(MongoPersistentProperty persistentProperty) {
+
+			if (persistentProperty.isDbReference() && persistentProperty.getDBRef().lazy()) {
+				if (persistentProperty.isArray() || Modifier.isFinal(persistentProperty.getActualType().getModifiers())) {
+					throw new MappingException(String.format(
+							"Invalid lazy DBRef property for %s. Found %s which must not be an array nor a final class.",
+							persistentProperty.getField(), persistentProperty.getActualType()));
+				}
+			}
+		}
+
+		private static void assertPropertyType(MongoPersistentProperty persistentProperty, Class<?>... validMatches) {
+
+			for (Class<?> potentialMatch : validMatches) {
+				if (ClassUtils.isAssignable(potentialMatch, persistentProperty.getActualType())) {
+					return;
+				}
+			}
+
+			throw new MappingException(
+					String.format("Missmatching types for %s. Found %s expected one of %s.", persistentProperty.getField(),
+							persistentProperty.getActualType(), StringUtils.arrayToCommaDelimitedString(validMatches)));
 		}
 	}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 by the original author(s).
+ * Copyright 2011-2014 by the original author(s).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@ import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.data.annotation.Id;
+import org.springframework.data.mapping.PersistentProperty;
+import org.springframework.data.mapping.model.FieldNamingStrategy;
 import org.springframework.data.mapping.model.MappingException;
 
 import com.mongodb.DBRef;
@@ -40,6 +42,7 @@ import com.mongodb.DBRef;
  * 
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 @RunWith(MockitoJUnitRunner.class)
 public class MongoMappingContextUnitTests {
@@ -84,7 +87,7 @@ public class MongoMappingContextUnitTests {
 		context.setApplicationContext(applicationContext);
 		context.setFieldNamingStrategy(new FieldNamingStrategy() {
 
-			public String getFieldName(MongoPersistentProperty property) {
+			public String getFieldName(PersistentProperty<?> property) {
 				return property.getName().toUpperCase(Locale.US);
 			}
 		});
@@ -103,6 +106,7 @@ public class MongoMappingContextUnitTests {
 		exception.expectMessage("firstname");
 		exception.expectMessage("lastname");
 		exception.expectMessage("foo");
+		exception.expectMessage("@Field");
 
 		MongoMappingContext context = new MongoMappingContext();
 		context.setApplicationContext(applicationContext);
@@ -177,6 +181,21 @@ public class MongoMappingContextUnitTests {
 		context.getPersistentEntity(ClassWithMultipleImplicitIds.class);
 	}
 
+	/**
+	 * @see DATAMONGO-976
+	 */
+	@Test
+	public void shouldRejectClassWithInvalidTextScoreProperty() {
+
+		exception.expect(MappingException.class);
+		exception.expectMessage("score");
+		exception.expectMessage("Float");
+		exception.expectMessage("Double");
+
+		MongoMappingContext context = new MongoMappingContext();
+		context.getPersistentEntity(ClassWithInvalidTextScoreProperty.class);
+	}
+
 	public class SampleClass {
 
 		Map<String, SampleClass> children;
@@ -237,5 +256,10 @@ public class MongoMappingContextUnitTests {
 
 		String _id;
 		String id;
+	}
+
+	class ClassWithInvalidTextScoreProperty {
+
+		@TextScore Locale score;
 	}
 }

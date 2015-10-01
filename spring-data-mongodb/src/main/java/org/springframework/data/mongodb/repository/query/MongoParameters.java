@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2013 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,21 +20,29 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.springframework.core.MethodParameter;
-import org.springframework.data.mongodb.core.geo.Distance;
-import org.springframework.data.mongodb.core.geo.Point;
+import org.springframework.data.domain.Range;
+import org.springframework.data.geo.Distance;
+import org.springframework.data.geo.Point;
+import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.mongodb.repository.Near;
 import org.springframework.data.mongodb.repository.query.MongoParameters.MongoParameter;
 import org.springframework.data.repository.query.Parameter;
 import org.springframework.data.repository.query.Parameters;
+import org.springframework.data.util.ClassTypeInformation;
+import org.springframework.data.util.TypeInformation;
 
 /**
  * Custom extension of {@link Parameters} discovering additional
  * 
  * @author Oliver Gierke
+ * @author Christoph Strobl
  */
 public class MongoParameters extends Parameters<MongoParameters, MongoParameter> {
 
-	private final Integer distanceIndex;
+	private final int rangeIndex;
+	private final int maxDistanceIndex;
+	private final Integer fullTextIndex;
+
 	private Integer nearIndex;
 
 	/**
@@ -47,7 +55,14 @@ public class MongoParameters extends Parameters<MongoParameters, MongoParameter>
 
 		super(method);
 		List<Class<?>> parameterTypes = Arrays.asList(method.getParameterTypes());
-		this.distanceIndex = parameterTypes.indexOf(Distance.class);
+
+		this.fullTextIndex = parameterTypes.indexOf(TextCriteria.class);
+
+		ClassTypeInformation<?> declaringClassInfo = ClassTypeInformation.from(method.getDeclaringClass());
+		List<TypeInformation<?>> parameterTypeInfo = declaringClassInfo.getParameterTypes(method);
+
+		this.rangeIndex = getTypeIndex(parameterTypeInfo, Range.class, Distance.class);
+		this.maxDistanceIndex = this.rangeIndex == -1 ? getTypeIndex(parameterTypeInfo, Distance.class, null) : -1;
 
 		if (this.nearIndex == null && isGeoNearMethod) {
 			this.nearIndex = getNearIndex(parameterTypes);
@@ -56,15 +71,17 @@ public class MongoParameters extends Parameters<MongoParameters, MongoParameter>
 		}
 	}
 
-	private MongoParameters(List<MongoParameter> parameters, Integer distanceIndex, Integer nearIndex) {
+	private MongoParameters(List<MongoParameter> parameters, int maxDistanceIndex, Integer nearIndex,
+			Integer fullTextIndex, int rangeIndex) {
 
 		super(parameters);
 
-		this.distanceIndex = distanceIndex;
 		this.nearIndex = nearIndex;
+		this.fullTextIndex = fullTextIndex;
+		this.maxDistanceIndex = maxDistanceIndex;
+		this.rangeIndex = rangeIndex;
 	}
 
-	@SuppressWarnings("unchecked")
 	private final int getNearIndex(List<Class<?>> parameterTypes) {
 
 		for (Class<?> reference : Arrays.asList(Point.class, double[].class)) {
@@ -105,13 +122,29 @@ public class MongoParameters extends Parameters<MongoParameters, MongoParameter>
 		return mongoParameter;
 	}
 
+	public int getDistanceRangeIndex() {
+		return -1;
+	}
+
 	/**
 	 * Returns the index of a {@link Distance} parameter to be used for geo queries.
 	 * 
 	 * @return
+	 * @deprecated since 1.7. Please use {@link #getMaxDistanceIndex()} instead.
 	 */
+	@Deprecated
 	public int getDistanceIndex() {
-		return distanceIndex;
+		return getMaxDistanceIndex();
+	}
+
+	/**
+	 * Returns the index of the {@link Distance} parameter to be used for max distance in geo queries.
+	 * 
+	 * @return
+	 * @since 1.7
+	 */
+	public int getMaxDistanceIndex() {
+		return maxDistanceIndex;
 	}
 
 	/**
@@ -123,13 +156,58 @@ public class MongoParameters extends Parameters<MongoParameters, MongoParameter>
 		return nearIndex;
 	}
 
+	/**
+	 * Returns ths inde of the parameter to be used as a textquery param
+	 * 
+	 * @return
+	 * @since 1.6
+	 */
+	public int getFullTextParameterIndex() {
+		return fullTextIndex != null ? fullTextIndex.intValue() : -1;
+	}
+
+	/**
+	 * @return
+	 * @since 1.6
+	 */
+	public boolean hasFullTextParameter() {
+		return this.fullTextIndex != null && this.fullTextIndex.intValue() >= 0;
+	}
+
+	/**
+	 * @return
+	 * @since 1.7
+	 */
+	public int getRangeIndex() {
+		return rangeIndex;
+	}
+
 	/* 
 	 * (non-Javadoc)
 	 * @see org.springframework.data.repository.query.Parameters#createFrom(java.util.List)
 	 */
 	@Override
 	protected MongoParameters createFrom(List<MongoParameter> parameters) {
-		return new MongoParameters(parameters, this.distanceIndex, this.nearIndex);
+		return new MongoParameters(parameters, this.maxDistanceIndex, this.nearIndex, this.fullTextIndex, this.rangeIndex);
+	}
+
+	private int getTypeIndex(List<TypeInformation<?>> parameterTypes, Class<?> type, Class<?> componentType) {
+
+		for (int i = 0; i < parameterTypes.size(); i++) {
+
+			TypeInformation<?> candidate = parameterTypes.get(i);
+
+			if (candidate.getType().equals(type)) {
+
+				if (componentType == null) {
+					return i;
+				} else if (componentType.equals(candidate.getComponentType().getType())) {
+					return i;
+				}
+			}
+		}
+
+		return -1;
 	}
 
 	/**
@@ -161,7 +239,8 @@ public class MongoParameters extends Parameters<MongoParameters, MongoParameter>
 		 */
 		@Override
 		public boolean isSpecialParameter() {
-			return super.isSpecialParameter() || getType().equals(Distance.class) || isNearParameter();
+			return super.isSpecialParameter() || Distance.class.isAssignableFrom(getType()) || isNearParameter()
+					|| TextCriteria.class.isAssignableFrom(getType());
 		}
 
 		private boolean isNearParameter() {
@@ -174,11 +253,13 @@ public class MongoParameters extends Parameters<MongoParameters, MongoParameter>
 		}
 
 		private boolean isPoint() {
-			return getType().equals(Point.class) || getType().equals(double[].class);
+			return Point.class.isAssignableFrom(getType()) || getType().equals(double[].class);
 		}
 
 		private boolean hasNearAnnotation() {
 			return parameter.getParameterAnnotation(Near.class) != null;
 		}
+
 	}
+
 }

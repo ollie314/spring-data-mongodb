@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,10 +34,13 @@ import org.springframework.data.mapping.PropertyReferenceException;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mapping.context.PersistentPropertyPath;
 import org.springframework.data.mapping.model.MappingException;
+import org.springframework.data.mongodb.core.convert.MappingMongoConverter.NestedDocument;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty.PropertyToFieldNameConverter;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.util.ClassTypeInformation;
+import org.springframework.data.util.TypeInformation;
 import org.springframework.util.Assert;
 
 import com.mongodb.BasicDBList;
@@ -57,6 +60,12 @@ import com.mongodb.DBRef;
 public class QueryMapper {
 
 	private static final List<String> DEFAULT_ID_NAMES = Arrays.asList("id", "_id");
+	private static final DBObject META_TEXT_SCORE = new BasicDBObject("$meta", "textScore");
+	static final ClassTypeInformation<?> NESTED_DOCUMENT = ClassTypeInformation.from(NestedDocument.class);
+
+	private enum MetaMapping {
+		FORCE, WHEN_PRESENT, IGNORE;
+	}
 
 	private final ConversionService conversionService;
 	private final MongoConverter converter;
@@ -120,6 +129,61 @@ public class QueryMapper {
 	}
 
 	/**
+	 * Maps fields used for sorting to the {@link MongoPersistentEntity}s properties. <br />
+	 * Also converts properties to their {@code $meta} representation if present.
+	 * 
+	 * @param sortObject
+	 * @param entity
+	 * @return
+	 * @since 1.6
+	 */
+	public DBObject getMappedSort(DBObject sortObject, MongoPersistentEntity<?> entity) {
+
+		if (sortObject == null) {
+			return null;
+		}
+
+		DBObject mappedSort = getMappedObject(sortObject, entity);
+		mapMetaAttributes(mappedSort, entity, MetaMapping.WHEN_PRESENT);
+		return mappedSort;
+	}
+
+	/**
+	 * Maps fields to retrieve to the {@link MongoPersistentEntity}s properties. <br />
+	 * Also onverts and potentially adds missing property {@code $meta} representation.
+	 * 
+	 * @param fieldsObject
+	 * @param entity
+	 * @return
+	 * @since 1.6
+	 */
+	public DBObject getMappedFields(DBObject fieldsObject, MongoPersistentEntity<?> entity) {
+
+		DBObject mappedFields = fieldsObject != null ? getMappedObject(fieldsObject, entity) : new BasicDBObject();
+		mapMetaAttributes(mappedFields, entity, MetaMapping.FORCE);
+		return mappedFields.keySet().isEmpty() ? null : mappedFields;
+	}
+
+	private void mapMetaAttributes(DBObject source, MongoPersistentEntity<?> entity, MetaMapping metaMapping) {
+
+		if (entity == null || source == null) {
+			return;
+		}
+
+		if (entity.hasTextScoreProperty() && !MetaMapping.IGNORE.equals(metaMapping)) {
+			MongoPersistentProperty textScoreProperty = entity.getTextScoreProperty();
+			if (MetaMapping.FORCE.equals(metaMapping)
+					|| (MetaMapping.WHEN_PRESENT.equals(metaMapping) && source.containsField(textScoreProperty.getFieldName()))) {
+				source.putAll(getMappedTextScoreField(textScoreProperty));
+			}
+		}
+	}
+
+	private DBObject getMappedTextScoreField(MongoPersistentProperty property) {
+		return new BasicDBObject(property.getFieldName(), META_TEXT_SCORE);
+	}
+
+	/**
 	 * Extracts the mapped object value for given field out of rawValue taking nested {@link Keyword}s into account
 	 * 
 	 * @param field
@@ -162,7 +226,7 @@ public class QueryMapper {
 	protected DBObject getMappedKeyword(Keyword keyword, MongoPersistentEntity<?> entity) {
 
 		// $or/$nor
-		if (keyword.isOrOrNor() || keyword.hasIterableValue()) {
+		if (keyword.isOrOrNor() || (keyword.hasIterableValue() && !keyword.isGeometry())) {
 
 			Iterable<?> conditions = keyword.getValue();
 			BasicDBList newConditions = new BasicDBList();
@@ -190,8 +254,8 @@ public class QueryMapper {
 		boolean needsAssociationConversion = property.isAssociation() && !keyword.isExists();
 		Object value = keyword.getValue();
 
-		Object convertedValue = needsAssociationConversion ? convertAssociation(value, property) : getMappedValue(
-				property.with(keyword.getKey()), value);
+		Object convertedValue = needsAssociationConversion ? convertAssociation(value, property)
+				: getMappedValue(property.with(keyword.getKey()), value);
 
 		return new BasicDBObject(keyword.key, convertedValue);
 	}
@@ -250,14 +314,32 @@ public class QueryMapper {
 	 * type of the given value is compatible with the type of the given document field in order to deal with potential
 	 * query field exclusions, since MongoDB uses the {@code int} {@literal 0} as an indicator for an excluded field.
 	 * 
-	 * @param documentField
+	 * @param documentField must not be {@literal null}.
 	 * @param value
 	 * @return
 	 */
 	protected boolean isAssociationConversionNecessary(Field documentField, Object value) {
-		return documentField.isAssociation() && value != null
-				&& (documentField.getProperty().getActualType().isAssignableFrom(value.getClass()) //
-				|| documentField.getPropertyEntity().getIdProperty().getActualType().isAssignableFrom(value.getClass()));
+
+		Assert.notNull(documentField, "Document field must not be null!");
+
+		if (value == null) {
+			return false;
+		}
+
+		if (!documentField.isAssociation()) {
+			return false;
+		}
+
+		Class<? extends Object> type = value.getClass();
+		MongoPersistentProperty property = documentField.getProperty();
+
+		if (property.getActualType().isAssignableFrom(type)) {
+			return true;
+		}
+
+		MongoPersistentEntity<?> entity = documentField.getPropertyEntity();
+		return entity.hasIdProperty()
+				&& (type.equals(DBRef.class) || entity.getIdProperty().getActualType().isAssignableFrom(type));
 	}
 
 	/**
@@ -289,7 +371,7 @@ public class QueryMapper {
 	 * @return the converted mongo type or null if source is null
 	 */
 	protected Object delegateConvertToMongoType(Object source, MongoPersistentEntity<?> entity) {
-		return converter.convertToMongoType(source);
+		return converter.convertToMongoType(source, entity == null ? null : entity.getTypeInformation());
 	}
 
 	protected Object convertAssociation(Object source, Field field) {
@@ -305,8 +387,14 @@ public class QueryMapper {
 	 */
 	protected Object convertAssociation(Object source, MongoPersistentProperty property) {
 
-		if (property == null || source == null || source instanceof DBRef || source instanceof DBObject) {
+		if (property == null || source == null || source instanceof DBObject) {
 			return source;
+		}
+
+		if (source instanceof DBRef) {
+
+			DBRef ref = (DBRef) source;
+			return new DBRef(ref.getCollectionName(), convertId(ref.getId()));
 		}
 
 		if (source instanceof Iterable) {
@@ -380,13 +468,20 @@ public class QueryMapper {
 	 */
 	public Object convertId(Object id) {
 
-		try {
-			return conversionService.convert(id, ObjectId.class);
-		} catch (ConversionException e) {
-			// Ignore
+		if (id == null) {
+			return null;
 		}
 
-		return delegateConvertToMongoType(id, null);
+		if (id instanceof String) {
+			return ObjectId.isValid(id.toString()) ? conversionService.convert(id, ObjectId.class) : id;
+		}
+
+		try {
+			return conversionService.canConvert(id.getClass(), ObjectId.class) ? conversionService.convert(id, ObjectId.class)
+					: delegateConvertToMongoType(id, null);
+		} catch (ConversionException o_O) {
+			return delegateConvertToMongoType(id, null);
+		}
 	}
 
 	/**
@@ -459,6 +554,16 @@ public class QueryMapper {
 
 		public boolean isOrOrNor() {
 			return key.matches(N_OR_PATTERN);
+		}
+
+		/**
+		 * Returns whether the current keyword is the {@code $geometry} keyword.
+		 * 
+		 * @return
+		 * @since 1.8
+		 */
+		public boolean isGeometry() {
+			return "$geometry".equalsIgnoreCase(key);
 		}
 
 		public boolean hasIterableValue() {
@@ -566,6 +671,10 @@ public class QueryMapper {
 		public Association<MongoPersistentProperty> getAssociation() {
 			return null;
 		}
+
+		public TypeInformation<?> getTypeHint() {
+			return ClassTypeInformation.OBJECT;
+		}
 	}
 
 	/**
@@ -594,6 +703,21 @@ public class QueryMapper {
 		 */
 		public MetadataBackedField(String name, MongoPersistentEntity<?> entity,
 				MappingContext<? extends MongoPersistentEntity<?>, MongoPersistentProperty> context) {
+			this(name, entity, context, null);
+		}
+
+		/**
+		 * Creates a new {@link MetadataBackedField} with the given name, {@link MongoPersistentEntity} and
+		 * {@link MappingContext} with the given {@link MongoPersistentProperty}.
+		 * 
+		 * @param name must not be {@literal null} or empty.
+		 * @param entity must not be {@literal null}.
+		 * @param context must not be {@literal null}.
+		 * @param property may be {@literal null}.
+		 */
+		public MetadataBackedField(String name, MongoPersistentEntity<?> entity,
+				MappingContext<? extends MongoPersistentEntity<?>, MongoPersistentProperty> context,
+				MongoPersistentProperty property) {
 
 			super(name);
 
@@ -603,7 +727,7 @@ public class QueryMapper {
 			this.mappingContext = context;
 
 			this.path = getPath(name);
-			this.property = path == null ? null : path.getLeafProperty();
+			this.property = path == null ? property : path.getLeafProperty();
 			this.association = findAssociation();
 		}
 
@@ -613,7 +737,7 @@ public class QueryMapper {
 		 */
 		@Override
 		public MetadataBackedField with(String name) {
-			return new MetadataBackedField(name, entity, mappingContext);
+			return new MetadataBackedField(name, entity, mappingContext, property);
 		}
 
 		/*
@@ -693,7 +817,7 @@ public class QueryMapper {
 		 */
 		@Override
 		public String getMappedKey() {
-			return path == null ? name : path.toDotPath(getPropertyConverter());
+			return path == null ? name : path.toDotPath(isAssociation() ? getAssociationConverter() : getPropertyConverter());
 		}
 
 		protected PersistentPropertyPath<MongoPersistentProperty> getPath() {
@@ -710,7 +834,7 @@ public class QueryMapper {
 
 			try {
 
-				PropertyPath path = PropertyPath.from(pathExpression, entity.getTypeInformation());
+				PropertyPath path = PropertyPath.from(pathExpression.replaceAll("\\.\\d", ""), entity.getTypeInformation());
 				PersistentPropertyPath<MongoPersistentProperty> propertyPath = mappingContext.getPersistentPropertyPath(path);
 
 				Iterator<MongoPersistentProperty> iterator = propertyPath.iterator();
@@ -743,7 +867,156 @@ public class QueryMapper {
 		 * @return
 		 */
 		protected Converter<MongoPersistentProperty, String> getPropertyConverter() {
-			return PropertyToFieldNameConverter.INSTANCE;
+			return new PositionParameterRetainingPropertyKeyConverter(name);
+		}
+
+		/**
+		 * Return the {@link Converter} to use for creating the mapped key of an association. Default implementation is
+		 * {@link AssociationConverter}.
+		 * 
+		 * @return
+		 * @since 1.7
+		 */
+		protected Converter<MongoPersistentProperty, String> getAssociationConverter() {
+			return new AssociationConverter(getAssociation());
+		}
+
+		/**
+		 * @author Christoph Strobl
+		 * @since 1.8
+		 */
+		static class PositionParameterRetainingPropertyKeyConverter implements Converter<MongoPersistentProperty, String> {
+
+			private final KeyMapper keyMapper;
+
+			public PositionParameterRetainingPropertyKeyConverter(String rawKey) {
+				this.keyMapper = new KeyMapper(rawKey);
+			}
+
+			/*
+			 * (non-Javadoc)
+			 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
+			 */
+			@Override
+			public String convert(MongoPersistentProperty source) {
+				return keyMapper.mapPropertyName(source);
+			}
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.core.convert.QueryMapper.Field#getTypeHint()
+		 */
+		@Override
+		public TypeInformation<?> getTypeHint() {
+
+			MongoPersistentProperty property = getProperty();
+
+			if (property == null) {
+				return super.getTypeHint();
+			}
+
+			if (property.getActualType().isInterface()
+					|| java.lang.reflect.Modifier.isAbstract(property.getActualType().getModifiers())) {
+				return ClassTypeInformation.OBJECT;
+			}
+
+			return NESTED_DOCUMENT;
+		}
+
+		/**
+		 * @author Christoph Strobl
+		 * @since 1.8
+		 */
+		static class KeyMapper {
+
+			private final Iterator<String> iterator;
+
+			public KeyMapper(String key) {
+
+				this.iterator = Arrays.asList(key.split("\\.")).iterator();
+				this.iterator.next();
+			}
+
+			/**
+			 * Maps the property name while retaining potential positional operator {@literal $}.
+			 * 
+			 * @param property
+			 * @return
+			 */
+			protected String mapPropertyName(MongoPersistentProperty property) {
+
+				String mappedName = PropertyToFieldNameConverter.INSTANCE.convert(property);
+				boolean inspect = iterator.hasNext();
+
+				while (inspect) {
+
+					String partial = iterator.next();
+					boolean isPositional = (isPositionalParameter(partial) && (property.isMap() || property.isCollectionLike()));
+
+					if (isPositional) {
+						mappedName += "." + partial;
+					}
+
+					inspect = isPositional && iterator.hasNext();
+				}
+
+				return mappedName;
+			}
+
+			private static boolean isPositionalParameter(String partial) {
+
+				if (partial.equals("$")) {
+					return true;
+				}
+
+				try {
+					Long.valueOf(partial);
+					return true;
+				} catch (NumberFormatException e) {
+					return false;
+				}
+			}
+		}
+	}
+
+	/**
+	 * Converter to skip all properties after an association property was rendered.
+	 * 
+	 * @author Oliver Gierke
+	 */
+	protected static class AssociationConverter implements Converter<MongoPersistentProperty, String> {
+
+		private final MongoPersistentProperty property;
+		private boolean associationFound;
+
+		/**
+		 * Creates a new {@link AssociationConverter} for the given {@link Association}.
+		 * 
+		 * @param association must not be {@literal null}.
+		 */
+		public AssociationConverter(Association<MongoPersistentProperty> association) {
+
+			Assert.notNull(association, "Association must not be null!");
+			this.property = association.getInverse();
+		}
+
+		/* 
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
+		 */
+		@Override
+		public String convert(MongoPersistentProperty source) {
+
+			if (associationFound) {
+				return null;
+			}
+
+			if (property.equals(source)) {
+				associationFound = true;
+			}
+
+			return source.getFieldName();
 		}
 	}
 }

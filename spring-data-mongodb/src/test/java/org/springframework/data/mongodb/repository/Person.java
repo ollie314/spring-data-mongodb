@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2013 the original author or authors.
+ * Copyright 2010-2015 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,17 +20,20 @@ import java.util.Date;
 import java.util.List;
 import java.util.Set;
 
-import org.springframework.data.mongodb.core.geo.Point;
+import org.springframework.data.geo.Point;
+import org.springframework.data.mongodb.core.index.GeoSpatialIndexType;
 import org.springframework.data.mongodb.core.index.GeoSpatialIndexed;
 import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.DBRef;
 import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.mapping.Field;
 
 /**
  * Sample domain class.
  * 
  * @author Oliver Gierke
  * @author Thomas Darimont
+ * @author Christoph Strobl
  */
 @Document
 public class Person extends Contact {
@@ -46,9 +49,11 @@ public class Person extends Contact {
 	@SuppressWarnings("unused") private Sex sex;
 	Date createdAt;
 
-	@GeoSpatialIndexed private Point location;
+	List<String> skills;
 
-	private Address address;
+	@GeoSpatialIndexed(type = GeoSpatialIndexType.GEO_2DSPHERE) private Point location;
+
+	private @Field("add") Address address;
 	private Set<Address> shippingAddresses;
 
 	@DBRef User creator;
@@ -259,6 +264,24 @@ public class Person extends Contact {
 		Person that = (Person) obj;
 
 		return this.getId().equals(that.getId());
+	}
+
+	public Person withAddress(Address address) {
+
+		this.address = address;
+		return this;
+	}
+
+	public void setCreator(User creator) {
+		this.creator = creator;
+	}
+
+	public void setSkills(List<String> skills) {
+		this.skills = skills;
+	}
+
+	public List<String> getSkills() {
+		return skills;
 	}
 
 	/*

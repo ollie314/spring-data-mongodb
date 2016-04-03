@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,6 +63,7 @@ import org.springframework.data.mongodb.core.convert.DbRefResolver;
 import org.springframework.data.mongodb.core.convert.DefaultDbRefResolver;
 import org.springframework.data.mongodb.core.convert.LazyLoadingProxy;
 import org.springframework.data.mongodb.core.convert.MappingMongoConverter;
+import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
 import org.springframework.data.mongodb.core.index.Index;
 import org.springframework.data.mongodb.core.index.Index.Duplicates;
 import org.springframework.data.mongodb.core.index.IndexField;
@@ -197,6 +198,7 @@ public class MongoTemplateTests {
 		template.dropCollection(SomeTemplate.class);
 		template.dropCollection(Address.class);
 		template.dropCollection(DocumentWithCollectionOfSamples.class);
+		template.dropCollection(WithGeoJson.class);
 	}
 
 	@Test
@@ -3035,7 +3037,7 @@ public class MongoTemplateTests {
 	 */
 	@Test
 	public void takesLimitIntoAccountWhenStreaming() {
-		
+
 		Person youngestPerson = new Person("John", 20);
 		Person oldestPerson = new Person("Jane", 42);
 
@@ -3049,11 +3051,124 @@ public class MongoTemplateTests {
 		assertThat(stream.hasNext(), is(false));
 	}
 
+	/**
+	 * @see DATAMONGO-1204
+	 */
+	@Test
+	public void resolvesCyclicDBRefCorrectly() {
+
+		SomeMessage message = new SomeMessage();
+		SomeContent content = new SomeContent();
+
+		template.save(message);
+		template.save(content);
+
+		message.dbrefContent = content;
+		content.dbrefMessage = message;
+
+		template.save(message);
+		template.save(content);
+
+		SomeMessage messageLoaded = template.findOne(query(where("id").is(message.id)), SomeMessage.class);
+		SomeContent contentLoaded = template.findOne(query(where("id").is(content.id)), SomeContent.class);
+
+		assertThat(messageLoaded.dbrefContent.id, is(contentLoaded.id));
+		assertThat(contentLoaded.dbrefMessage.id, is(messageLoaded.id));
+	}
+
+	/**
+	 * @see DATAMONGO-1287
+	 */
+	@Test
+	public void shouldReuseAlreadyResolvedLazyLoadedDBRefWhenUsedAsPersistenceConstrcutorArgument() {
+
+		Document docInCtor = new Document();
+		docInCtor.id = "doc-in-ctor";
+		template.save(docInCtor);
+
+		DocumentWithLazyDBrefUsedInPresistenceConstructor source = new DocumentWithLazyDBrefUsedInPresistenceConstructor(
+				docInCtor);
+
+		template.save(source);
+
+		DocumentWithLazyDBrefUsedInPresistenceConstructor loaded = template.findOne(query(where("id").is(source.id)),
+				DocumentWithLazyDBrefUsedInPresistenceConstructor.class);
+		assertThat(loaded.refToDocUsedInCtor, not(instanceOf(LazyLoadingProxy.class)));
+		assertThat(loaded.refToDocNotUsedInCtor, nullValue());
+	}
+
+	/**
+	 * @see DATAMONGO-1287
+	 */
+	@Test
+	public void shouldNotReuseLazyLoadedDBRefWhenTypeUsedInPersistenceConstrcutorButValueRefersToAnotherProperty() {
+
+		Document docNotUsedInCtor = new Document();
+		docNotUsedInCtor.id = "doc-but-not-used-in-ctor";
+		template.save(docNotUsedInCtor);
+
+		DocumentWithLazyDBrefUsedInPresistenceConstructor source = new DocumentWithLazyDBrefUsedInPresistenceConstructor(
+				null);
+		source.refToDocNotUsedInCtor = docNotUsedInCtor;
+
+		template.save(source);
+
+		DocumentWithLazyDBrefUsedInPresistenceConstructor loaded = template.findOne(query(where("id").is(source.id)),
+				DocumentWithLazyDBrefUsedInPresistenceConstructor.class);
+		assertThat(loaded.refToDocNotUsedInCtor, instanceOf(LazyLoadingProxy.class));
+		assertThat(loaded.refToDocUsedInCtor, nullValue());
+	}
+
+	/**
+	 * @see DATAMONGO-1287
+	 */
+	@Test
+	public void shouldRespectParamterValueWhenAttemptingToReuseLazyLoadedDBRefUsedInPersistenceConstrcutor() {
+
+		Document docInCtor = new Document();
+		docInCtor.id = "doc-in-ctor";
+		template.save(docInCtor);
+
+		Document docNotUsedInCtor = new Document();
+		docNotUsedInCtor.id = "doc-but-not-used-in-ctor";
+		template.save(docNotUsedInCtor);
+
+		DocumentWithLazyDBrefUsedInPresistenceConstructor source = new DocumentWithLazyDBrefUsedInPresistenceConstructor(
+				docInCtor);
+		source.refToDocNotUsedInCtor = docNotUsedInCtor;
+
+		template.save(source);
+
+		DocumentWithLazyDBrefUsedInPresistenceConstructor loaded = template.findOne(query(where("id").is(source.id)),
+				DocumentWithLazyDBrefUsedInPresistenceConstructor.class);
+		assertThat(loaded.refToDocUsedInCtor, not(instanceOf(LazyLoadingProxy.class)));
+		assertThat(loaded.refToDocNotUsedInCtor, instanceOf(LazyLoadingProxy.class));
+	}
+
+	/**
+	 * @see DATAMONGO-1401
+	 */
+	@Test
+	public void updateShouldWorkForTypesContainingGeoJsonTypes() {
+
+		WithGeoJson wgj = new WithGeoJson();
+		wgj.id = "1";
+		wgj.description = "datamongo-1401";
+		wgj.point = new GeoJsonPoint(1D, 2D);
+
+		template.save(wgj);
+
+		wgj.description = "datamongo-1401-update";
+		template.save(wgj);
+
+		assertThat(template.findOne(query(where("id").is(wgj.id)), WithGeoJson.class).point, is(equalTo(wgj.point)));
+	}
+
 	static class DoucmentWithNamedIdField {
 
 		@Id String someIdKey;
 
-		@Field(value = "val")//
+		@Field(value = "val") //
 		String value;
 
 		@Override
@@ -3351,6 +3466,7 @@ public class MongoTemplateTests {
 		String id;
 		String text;
 		String name;
+		@org.springframework.data.mongodb.core.mapping.DBRef SomeMessage dbrefMessage;
 
 		public String getName() {
 			return name;
@@ -3375,4 +3491,27 @@ public class MongoTemplateTests {
 		@org.springframework.data.mongodb.core.mapping.DBRef SomeContent dbrefContent;
 		SomeContent normalContent;
 	}
+
+	static class DocumentWithLazyDBrefUsedInPresistenceConstructor {
+
+		@Id String id;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) Document refToDocUsedInCtor;
+		@org.springframework.data.mongodb.core.mapping.DBRef(lazy = true) Document refToDocNotUsedInCtor;
+
+		@PersistenceConstructor
+		public DocumentWithLazyDBrefUsedInPresistenceConstructor(Document refToDocUsedInCtor) {
+			this.refToDocUsedInCtor = refToDocUsedInCtor;
+		}
+
+	}
+
+	static class WithGeoJson {
+
+		@Id String id;
+		@Version //
+		Integer version;
+		String description;
+		GeoJsonPoint point;
+	}
+
 }

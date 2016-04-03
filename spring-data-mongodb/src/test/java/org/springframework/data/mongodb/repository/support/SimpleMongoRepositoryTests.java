@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2014 the original author or authors.
+ * Copyright 2010-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@ package org.springframework.data.mongodb.repository.support;
 
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
+import static org.springframework.data.domain.ExampleMatcher.*;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -31,16 +32,28 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Example;
+import org.springframework.data.domain.ExampleMatcher.StringMatcher;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.geo.Point;
 import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.geo.GeoJsonPoint;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.repository.Address;
 import org.springframework.data.mongodb.repository.Person;
 import org.springframework.data.mongodb.repository.Person.Sex;
+import org.springframework.data.mongodb.repository.User;
 import org.springframework.data.mongodb.repository.query.MongoEntityInformation;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * @author <a href="mailto:kowsercse@gmail.com">A. B. M. Kowser</a>
  * @author Thomas Darimont
+ * @author Christoph Strobl
+ * @author Mark Paluch
  */
 @RunWith(SpringJUnit4ClassRunner.class)
 @ContextConfiguration("classpath:infrastructure.xml")
@@ -120,7 +133,7 @@ public class SimpleMongoRepositoryTests {
 	 * @see DATAMONGO-1054
 	 */
 	@Test
-	public void shouldInsertMutlipleFromList() {
+	public void shouldInsertMultipleFromList() {
 
 		String randomId = UUID.randomUUID().toString();
 		Map<String, Person> idToPerson = new HashMap<String, Person>();
@@ -160,11 +173,287 @@ public class SimpleMongoRepositoryTests {
 		assertThatAllReferencePersonsWereStoredCorrectly(idToPerson, saved);
 	}
 
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findByExampleShouldLookUpEntriesCorrectly() {
+
+		Person sample = new Person();
+		sample.setLastname("Matthews");
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		Page<Person> result = repository.findAll(Example.of(sample), new PageRequest(0, 10));
+
+		assertThat(result.getContent(), hasItems(dave, oliver));
+		assertThat(result.getContent(), hasSize(2));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldLookUpEntriesCorrectly() {
+
+		Person sample = new Person();
+		sample.setLastname("Matthews");
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<Person> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, containsInAnyOrder(dave, oliver));
+		assertThat(result, hasSize(2));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldLookUpEntriesCorrectlyWhenUsingNestedObject() {
+
+		dave.setAddress(new Address("1600 Pennsylvania Ave NW", "20500", "Washington"));
+		repository.save(dave);
+
+		oliver.setAddress(new Address("East Capitol St NE & First St SE", "20004", "Washington"));
+		repository.save(oliver);
+
+		Person sample = new Person();
+		sample.setAddress(dave.getAddress());
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<Person> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, hasItem(dave));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldLookUpEntriesCorrectlyWhenUsingPartialNestedObject() {
+
+		dave.setAddress(new Address("1600 Pennsylvania Ave NW", "20500", "Washington"));
+		repository.save(dave);
+
+		oliver.setAddress(new Address("East Capitol St NE & First St SE", "20004", "Washington"));
+		repository.save(oliver);
+
+		Person sample = new Person();
+		sample.setAddress(new Address(null, null, "Washington"));
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<Person> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, hasItems(dave, oliver));
+		assertThat(result, hasSize(2));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldNotFindEntriesWhenUsingPartialNestedObjectInStrictMode() {
+
+		dave.setAddress(new Address("1600 Pennsylvania Ave NW", "20500", "Washington"));
+		repository.save(dave);
+
+		Person sample = new Person();
+		sample.setAddress(new Address(null, null, "Washington"));
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		Example<Person> example = Example.of(sample, matching().withIncludeNullValues());
+		List<Person> result = repository.findAll(example);
+
+		assertThat(result, empty());
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldLookUpEntriesCorrectlyWhenUsingNestedObjectInStrictMode() {
+
+		dave.setAddress(new Address("1600 Pennsylvania Ave NW", "20500", "Washington"));
+		repository.save(dave);
+
+		Person sample = new Person();
+		sample.setAddress(dave.getAddress());
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		Example<Person> example = Example.of(sample, matching().withIncludeNullValues());
+		List<Person> result = repository.findAll(example);
+
+		assertThat(result, hasItem(dave));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldRespectStringMatchMode() {
+
+		Person sample = new Person();
+		sample.setLastname("Mat");
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		Example<Person> example = Example.of(sample, matching().withStringMatcher(StringMatcher.STARTING));
+		List<Person> result = repository.findAll(example);
+
+		assertThat(result, hasItems(dave, oliver));
+		assertThat(result, hasSize(2));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldResolveDbRefCorrectly() {
+
+		User user = new User();
+		user.setId("c0nf1ux");
+		user.setUsername("conflux");
+		template.save(user);
+
+		Person megan = new Person("megan", "tarash");
+		megan.setCreator(user);
+
+		repository.save(megan);
+
+		Person sample = new Person();
+		sample.setCreator(user);
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<Person> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, hasItem(megan));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldResolveLegacyCoordinatesCorrectly() {
+
+		Person megan = new Person("megan", "tarash");
+		megan.setLocation(new Point(41.85003D, -87.65005D));
+
+		repository.save(megan);
+
+		Person sample = new Person();
+		sample.setLocation(megan.getLocation());
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<Person> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, hasItem(megan));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldResolveGeoJsonCoordinatesCorrectly() {
+
+		Person megan = new Person("megan", "tarash");
+		megan.setLocation(new GeoJsonPoint(41.85003D, -87.65005D));
+
+		repository.save(megan);
+
+		Person sample = new Person();
+		sample.setLocation(megan.getLocation());
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<Person> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, hasItem(megan));
+		assertThat(result, hasSize(1));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldProcessInheritanceCorrectly() {
+
+		PersonExtended reference = new PersonExtended();
+		reference.setLastname("Matthews");
+
+		repository.save(reference);
+
+		PersonExtended sample = new PersonExtended();
+		sample.setLastname("Matthews");
+
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		List<PersonExtended> result = repository.findAll(Example.of(sample));
+
+		assertThat(result, hasSize(1));
+		assertThat(result, hasItem(reference));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findOneByExampleShouldLookUpEntriesCorrectly() {
+
+		Person sample = new Person();
+		sample.setFirstname("Dave");
+		sample.setLastname("Matthews");
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		Person result = repository.findOne(Example.of(sample));
+
+		assertThat(result, is(equalTo(dave)));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void existsByExampleShouldLookUpEntriesCorrectly() {
+
+		Person sample = new Person();
+		sample.setFirstname("Dave");
+		sample.setLastname("Matthews");
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		boolean result = repository.exists(Example.of(sample));
+
+		assertThat(result, is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void countByExampleShouldLookUpEntriesCorrectly() {
+
+		Person sample = new Person();
+		sample.setLastname("Matthews");
+		trimDomainType(sample, "id", "createdAt", "email");
+
+		long result = repository.count(Example.of(sample));
+
+		assertThat(result, is(equalTo(2L)));
+	}
+
 	private void assertThatAllReferencePersonsWereStoredCorrectly(Map<String, Person> references, List<Person> saved) {
 
 		for (Person person : saved) {
 			Person reference = references.get(person.getId());
 			assertThat(person, is(equalTo(reference)));
+		}
+	}
+
+	private void trimDomainType(Object source, String... attributes) {
+
+		for (String attribute : attributes) {
+			ReflectionTestUtils.setField(source, attribute, null);
 		}
 	}
 
@@ -201,4 +490,6 @@ public class SimpleMongoRepositoryTests {
 		}
 	}
 
+	@Document
+	static class PersonExtended extends Person {}
 }

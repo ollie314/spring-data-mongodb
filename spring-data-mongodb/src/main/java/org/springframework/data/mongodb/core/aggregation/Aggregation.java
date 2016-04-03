@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@ import org.springframework.data.domain.Sort.Direction;
 import org.springframework.data.mongodb.core.aggregation.ExposedFields.ExposedField;
 import org.springframework.data.mongodb.core.aggregation.ExposedFields.FieldReference;
 import org.springframework.data.mongodb.core.aggregation.Fields.AggregationField;
+import org.springframework.data.mongodb.core.aggregation.FieldsExposingAggregationOperation.InheritsFieldsAggregationOperation;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.SerializationUtils;
@@ -37,10 +38,12 @@ import com.mongodb.DBObject;
 /**
  * An {@code Aggregation} is a representation of a list of aggregation steps to be performed by the MongoDB Aggregation
  * Framework.
- * 
+ *
  * @author Tobias Trelle
  * @author Thomas Darimont
  * @author Oliver Gierke
+ * @author Mark Paluch
+ * @author Alessio Fachechi
  * @since 1.3
  */
 public class Aggregation {
@@ -65,7 +68,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param operations must not be {@literal null} or empty.
 	 */
 	public static Aggregation newAggregation(List<? extends AggregationOperation> operations) {
@@ -74,7 +77,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param operations must not be {@literal null} or empty.
 	 */
 	public static Aggregation newAggregation(AggregationOperation... operations) {
@@ -84,7 +87,7 @@ public class Aggregation {
 	/**
 	 * Returns a copy of this {@link Aggregation} with the given {@link AggregationOptions} set. Note that options are
 	 * supported in MongoDB version 2.6+.
-	 * 
+	 *
 	 * @param options must not be {@literal null}.
 	 * @return
 	 * @since 1.6
@@ -97,7 +100,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link TypedAggregation} for the given type and {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param type must not be {@literal null}.
 	 * @param operations must not be {@literal null} or empty.
 	 */
@@ -107,7 +110,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link TypedAggregation} for the given type and {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param type must not be {@literal null}.
 	 * @param operations must not be {@literal null} or empty.
 	 */
@@ -117,7 +120,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param aggregationOperations must not be {@literal null} or empty.
 	 */
 	protected Aggregation(AggregationOperation... aggregationOperations) {
@@ -137,7 +140,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param aggregationOperations must not be {@literal null} or empty.
 	 */
 	protected Aggregation(List<AggregationOperation> aggregationOperations) {
@@ -146,14 +149,14 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link Aggregation} from the given {@link AggregationOperation}s.
-	 * 
+	 *
 	 * @param aggregationOperations must not be {@literal null} or empty.
 	 * @param options must not be {@literal null} or empty.
 	 */
 	protected Aggregation(List<AggregationOperation> aggregationOperations, AggregationOptions options) {
 
 		Assert.notNull(aggregationOperations, "AggregationOperations must not be null!");
-		Assert.isTrue(aggregationOperations.size() > 0, "At least one AggregationOperation has to be provided");
+		Assert.isTrue(!aggregationOperations.isEmpty(), "At least one AggregationOperation has to be provided");
 		Assert.notNull(options, "AggregationOptions must not be null!");
 
 		this.operations = aggregationOperations;
@@ -162,7 +165,7 @@ public class Aggregation {
 
 	/**
 	 * A pointer to the previous {@link AggregationOperation}.
-	 * 
+	 *
 	 * @return
 	 */
 	public static String previousOperation() {
@@ -171,7 +174,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link ProjectionOperation} including the given fields.
-	 * 
+	 *
 	 * @param fields must not be {@literal null}.
 	 * @return
 	 */
@@ -181,7 +184,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link ProjectionOperation} includeing the given {@link Fields}.
-	 * 
+	 *
 	 * @param fields must not be {@literal null}.
 	 * @return
 	 */
@@ -191,7 +194,7 @@ public class Aggregation {
 
 	/**
 	 * Factory method to create a new {@link UnwindOperation} for the field with the given name.
-	 * 
+	 *
 	 * @param fieldName must not be {@literal null} or empty.
 	 * @return
 	 */
@@ -201,7 +204,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link GroupOperation} for the given fields.
-	 * 
+	 *
 	 * @param fields must not be {@literal null}.
 	 * @return
 	 */
@@ -211,7 +214,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link GroupOperation} for the given {@link Fields}.
-	 * 
+	 *
 	 * @param fields must not be {@literal null}.
 	 * @return
 	 */
@@ -221,7 +224,7 @@ public class Aggregation {
 
 	/**
 	 * Factory method to create a new {@link SortOperation} for the given {@link Sort}.
-	 * 
+	 *
 	 * @param sort must not be {@literal null}.
 	 * @return
 	 */
@@ -231,7 +234,7 @@ public class Aggregation {
 
 	/**
 	 * Factory method to create a new {@link SortOperation} for the given sort {@link Direction} and {@code fields}.
-	 * 
+	 *
 	 * @param direction must not be {@literal null}.
 	 * @param fields must not be {@literal null}.
 	 * @return
@@ -242,7 +245,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link SkipOperation} skipping the given number of elements.
-	 * 
+	 *
 	 * @param elementsToSkip must not be less than zero.
 	 * @return
 	 */
@@ -252,7 +255,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link LimitOperation} limiting the result to the given number of elements.
-	 * 
+	 *
 	 * @param maxElements must not be less than zero.
 	 * @return
 	 */
@@ -262,7 +265,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link MatchOperation} using the given {@link Criteria}.
-	 * 
+	 *
 	 * @param criteria must not be {@literal null}.
 	 * @return
 	 */
@@ -271,11 +274,39 @@ public class Aggregation {
 	}
 
 	/**
+	 * Creates a new {@link LookupOperation}.
+	 *
+	 * @param from must not be {@literal null}.
+	 * @param localField must not be {@literal null}.
+	 * @param foreignField must not be {@literal null}.
+	 * @param as must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.9
+	 */
+	public static LookupOperation lookup(String from, String localField, String foreignField, String as) {
+		return lookup(field(from), field(localField), field(foreignField), field(as));
+	}
+
+	/**
+	 * Creates a new {@link LookupOperation} for the given {@link Fields}.
+	 *
+	 * @param from must not be {@literal null}.
+	 * @param localField must not be {@literal null}.
+	 * @param foreignField must not be {@literal null}.
+	 * @param as must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.9
+	 */
+	public static LookupOperation lookup(Field from, Field localField, Field foreignField, Field as) {
+		return new LookupOperation(from, localField, foreignField, as);
+	}
+
+	/**
 	 * Creates a new {@link Fields} instance for the given field names.
-	 * 
-	 * @see Fields#fields(String...)
+	 *
 	 * @param fields must not be {@literal null}.
 	 * @return
+	 * @see Fields#fields(String...)
 	 */
 	public static Fields fields(String... fields) {
 		return Fields.fields(fields);
@@ -283,7 +314,7 @@ public class Aggregation {
 
 	/**
 	 * Creates a new {@link Fields} instance from the given field name and target reference.
-	 * 
+	 *
 	 * @param name must not be {@literal null} or empty.
 	 * @param target must not be {@literal null} or empty.
 	 * @return
@@ -295,7 +326,7 @@ public class Aggregation {
 	/**
 	 * Creates a new {@link GeoNearOperation} instance from the given {@link NearQuery} and the{@code distanceField}. The
 	 * {@code distanceField} defines output field that contains the calculated distance.
-	 * 
+	 *
 	 * @param query must not be {@literal null}.
 	 * @param distanceField must not be {@literal null} or empty.
 	 * @return
@@ -307,7 +338,7 @@ public class Aggregation {
 
 	/**
 	 * Returns a new {@link AggregationOptions.Builder}.
-	 * 
+	 *
 	 * @return
 	 * @since 1.6
 	 */
@@ -317,7 +348,7 @@ public class Aggregation {
 
 	/**
 	 * Converts this {@link Aggregation} specification to a {@link DBObject}.
-	 * 
+	 *
 	 * @param inputCollectionName the name of the input collection
 	 * @return the {@code DBObject} representing this aggregation
 	 */
@@ -331,8 +362,14 @@ public class Aggregation {
 			operationDocuments.add(operation.toDBObject(context));
 
 			if (operation instanceof FieldsExposingAggregationOperation) {
+
 				FieldsExposingAggregationOperation exposedFieldsOperation = (FieldsExposingAggregationOperation) operation;
-				context = new ExposedFieldsAggregationOperationContext(exposedFieldsOperation.getFields(), rootContext);
+
+				if (operation instanceof InheritsFieldsAggregationOperation) {
+					context = new InheritingExposedFieldsAggregationOperationContext(exposedFieldsOperation.getFields(), context);
+				} else {
+					context = new ExposedFieldsAggregationOperationContext(exposedFieldsOperation.getFields(), context);
+				}
 			}
 		}
 
@@ -356,7 +393,7 @@ public class Aggregation {
 
 	/**
 	 * Simple {@link AggregationOperationContext} that just returns {@link FieldReference}s as is.
-	 * 
+	 *
 	 * @author Oliver Gierke
 	 */
 	private static class NoOpAggregationOperationContext implements AggregationOperationContext {
@@ -391,7 +428,7 @@ public class Aggregation {
 
 	/**
 	 * Describes the system variables available in MongoDB aggregation framework pipeline expressions.
-	 * 
+	 *
 	 * @author Thomas Darimont
 	 * @see http://docs.mongodb.org/manual/reference/aggregation-variables
 	 */
@@ -404,7 +441,7 @@ public class Aggregation {
 		/**
 		 * Return {@literal true} if the given {@code fieldRef} denotes a well-known system variable, {@literal false}
 		 * otherwise.
-		 * 
+		 *
 		 * @param fieldRef may be {@literal null}.
 		 * @return
 		 */

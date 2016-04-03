@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,10 +27,12 @@ import org.bson.types.ObjectId;
 import org.springframework.core.convert.ConversionException;
 import org.springframework.core.convert.ConversionService;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.data.domain.Example;
 import org.springframework.data.mapping.Association;
 import org.springframework.data.mapping.PersistentEntity;
 import org.springframework.data.mapping.PropertyPath;
 import org.springframework.data.mapping.PropertyReferenceException;
+import org.springframework.data.mapping.context.InvalidPersistentPropertyPath;
 import org.springframework.data.mapping.context.MappingContext;
 import org.springframework.data.mapping.context.PersistentPropertyPath;
 import org.springframework.data.mapping.model.MappingException;
@@ -70,6 +72,7 @@ public class QueryMapper {
 	private final ConversionService conversionService;
 	private final MongoConverter converter;
 	private final MappingContext<? extends MongoPersistentEntity<?>, MongoPersistentProperty> mappingContext;
+	private final MongoExampleMapper exampleMapper;
 
 	/**
 	 * Creates a new {@link QueryMapper} with the given {@link MongoConverter}.
@@ -83,6 +86,7 @@ public class QueryMapper {
 		this.conversionService = converter.getConversionService();
 		this.converter = converter;
 		this.mappingContext = converter.getMappingContext();
+		this.exampleMapper = new MongoExampleMapper(converter);
 	}
 
 	/**
@@ -119,10 +123,20 @@ public class QueryMapper {
 				continue;
 			}
 
-			Field field = createPropertyField(entity, key, mappingContext);
-			Entry<String, Object> entry = getMappedObjectForField(field, query.get(key));
+			try {
 
-			result.put(entry.getKey(), entry.getValue());
+				Field field = createPropertyField(entity, key, mappingContext);
+				Entry<String, Object> entry = getMappedObjectForField(field, query.get(key));
+				result.put(entry.getKey(), entry.getValue());
+			} catch (InvalidPersistentPropertyPath invalidPathException) {
+
+				// in case the object has not already been mapped
+				if (!(query.get(key) instanceof DBObject)) {
+					throw invalidPathException;
+				}
+
+				result.put(key, query.get(key));
+			}
 		}
 
 		return result;
@@ -237,6 +251,10 @@ public class QueryMapper {
 			}
 
 			return new BasicDBObject(keyword.getKey(), newConditions);
+		}
+
+		if (keyword.isSample()) {
+			return exampleMapper.getMappedExample(keyword.<Example<?>> getValue(), entity);
 		}
 
 		return new BasicDBObject(keyword.getKey(), convertSimpleOrDBObject(keyword.getValue(), entity));
@@ -564,6 +582,16 @@ public class QueryMapper {
 		 */
 		public boolean isGeometry() {
 			return "$geometry".equalsIgnoreCase(key);
+		}
+
+		/**
+		 * Returns wheter the current keyword indicates a sample object.
+		 * 
+		 * @return
+		 * @since 1.8
+		 */
+		public boolean isSample() {
+			return "$sample".equalsIgnoreCase(key);
 		}
 
 		public boolean hasIterableValue() {
@@ -946,7 +974,7 @@ public class QueryMapper {
 			 */
 			protected String mapPropertyName(MongoPersistentProperty property) {
 
-				String mappedName = PropertyToFieldNameConverter.INSTANCE.convert(property);
+				StringBuilder mappedName = new StringBuilder(PropertyToFieldNameConverter.INSTANCE.convert(property));
 				boolean inspect = iterator.hasNext();
 
 				while (inspect) {
@@ -955,18 +983,18 @@ public class QueryMapper {
 					boolean isPositional = (isPositionalParameter(partial) && (property.isMap() || property.isCollectionLike()));
 
 					if (isPositional) {
-						mappedName += "." + partial;
+						mappedName.append(".").append(partial);
 					}
 
 					inspect = isPositional && iterator.hasNext();
 				}
 
-				return mappedName;
+				return mappedName.toString();
 			}
 
 			private static boolean isPositionalParameter(String partial) {
 
-				if (partial.equals("$")) {
+				if ("$".equals(partial)) {
 					return true;
 				}
 

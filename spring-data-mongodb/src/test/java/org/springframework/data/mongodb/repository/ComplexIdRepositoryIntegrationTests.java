@@ -1,5 +1,5 @@
 /*
- * Copyright 2014 the original author or authors.
+ * Copyright 2014-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package org.springframework.data.mongodb.repository;
 import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -39,6 +40,7 @@ import com.mongodb.MongoClient;
 /**
  * @author Christoph Strobl
  * @author Oliver Gierke
+ * @author Mark Paluch
  */
 @RunWith(SpringJUnit4ClassRunner.class)
 @ContextConfiguration
@@ -129,4 +131,27 @@ public class ComplexIdRepositoryIntegrationTests {
 		assertThat(loaded, is(Matchers.<UserWithComplexId> iterableWithSize(1)));
 		assertThat(loaded, contains(userWithId));
 	}
+
+	/**
+	 * @see DATAMONGO-1373
+	 */
+	@Test
+	public void composedAnnotationFindQueryShouldWorkWhenUsingComplexId() {
+
+		repo.save(userWithId);
+
+		assertThat(repo.getUserUsingComposedAnnotationByComplexId(id), is(userWithId));
+	}
+
+	/**
+	 * @see DATAMONGO-1373
+	 */
+	@Test
+	public void composedAnnotationFindMetaShouldWorkWhenUsingComplexId() {
+
+		repo.save(userWithId);
+
+		assertThat(repo.findUsersUsingComposedMetaAnnotationByUserIds(Arrays.asList(id)), hasSize(0));
+	}
+
 }

@@ -264,7 +264,8 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 			accessor.setProperty(idProperty, idValue);
 		}
 
-		final ObjectPath currentPath = path.push(result, entity, idValue);
+		final ObjectPath currentPath = path.push(result, entity,
+				idValue != null ? dbo.get(idProperty.getFieldName()) : null);
 
 		// Set properties not already set in the constructor
 		entity.doWithProperties(new PropertyHandler<MongoPersistentProperty>() {
@@ -290,7 +291,7 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 				final MongoPersistentProperty property = association.getInverse();
 				Object value = dbo.get(property.getFieldName());
 
-				if (value == null) {
+				if (value == null || entity.isConstructorArgument(property)) {
 					return;
 				}
 
@@ -1196,10 +1197,6 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 		}
 
 		Object object = dbref == null ? null : path.getPathItem(dbref.getId(), dbref.getCollectionName());
-
-		if (object != null) {
-			return (T) object;
-		}
 
 		return (T) (object != null ? object : read(type, readRef(dbref), path));
 	}

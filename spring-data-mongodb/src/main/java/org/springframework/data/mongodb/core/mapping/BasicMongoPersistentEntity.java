@@ -77,7 +77,7 @@ public class BasicMongoPersistentEntity<T> extends BasicPersistentEntity<T, Mong
 		Class<?> rawType = typeInformation.getType();
 		String fallback = MongoCollectionUtils.getPreferredCollectionName(rawType);
 
-		Document document = rawType.getAnnotation(Document.class);
+		Document document = this.findAnnotation(Document.class);
 
 		this.expression = detectExpression(document);
 		this.context = new StandardEvaluationContext();

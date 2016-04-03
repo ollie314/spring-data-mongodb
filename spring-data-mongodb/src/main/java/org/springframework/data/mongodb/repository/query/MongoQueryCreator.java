@@ -38,6 +38,7 @@ import org.springframework.data.mongodb.core.index.GeoSpatialIndexed;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.CriteriaDefinition;
+import org.springframework.data.mongodb.core.query.MongoRegexCreator;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.repository.query.ConvertingParameterAccessor.PotentiallyConvertingIterator;
 import org.springframework.data.repository.query.parser.AbstractQueryCreator;
@@ -46,7 +47,6 @@ import org.springframework.data.repository.query.parser.Part.IgnoreCaseType;
 import org.springframework.data.repository.query.parser.Part.Type;
 import org.springframework.data.repository.query.parser.PartTree;
 import org.springframework.util.Assert;
-import org.springframework.util.ObjectUtils;
 
 /**
  * Custom query creator to create Mongo criterias.
@@ -169,32 +169,31 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	 * @param parameters
 	 * @return
 	 */
-	private Criteria from(Part part, MongoPersistentProperty property, Criteria criteria,
-			PotentiallyConvertingIterator parameters) {
+	private Criteria from(Part part, MongoPersistentProperty property, Criteria criteria, Iterator<Object> parameters) {
 
 		Type type = part.getType();
 
 		switch (type) {
 			case AFTER:
 			case GREATER_THAN:
-				return criteria.gt(parameters.nextConverted(property));
+				return criteria.gt(parameters.next());
 			case GREATER_THAN_EQUAL:
-				return criteria.gte(parameters.nextConverted(property));
+				return criteria.gte(parameters.next());
 			case BEFORE:
 			case LESS_THAN:
-				return criteria.lt(parameters.nextConverted(property));
+				return criteria.lt(parameters.next());
 			case LESS_THAN_EQUAL:
-				return criteria.lte(parameters.nextConverted(property));
+				return criteria.lte(parameters.next());
 			case BETWEEN:
-				return criteria.gt(parameters.nextConverted(property)).lt(parameters.nextConverted(property));
+				return criteria.gt(parameters.next()).lt(parameters.next());
 			case IS_NOT_NULL:
 				return criteria.ne(null);
 			case IS_NULL:
 				return criteria.is(null);
 			case NOT_IN:
-				return criteria.nin(nextAsArray(parameters, property));
+				return criteria.nin(nextAsArray(parameters));
 			case IN:
-				return criteria.in(nextAsArray(parameters, property));
+				return criteria.in(nextAsArray(parameters));
 			case LIKE:
 			case STARTING_WITH:
 			case ENDING_WITH:
@@ -241,12 +240,12 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 				return criteria.within((Shape) parameter);
 			case SIMPLE_PROPERTY:
 
-				return isSimpleComparisionPossible(part) ? criteria.is(parameters.nextConverted(property))
+				return isSimpleComparisionPossible(part) ? criteria.is(parameters.next())
 						: createLikeRegexCriteriaOrThrow(part, property, criteria, parameters, false);
 
 			case NEGATING_SIMPLE_PROPERTY:
 
-				return isSimpleComparisionPossible(part) ? criteria.ne(parameters.nextConverted(property))
+				return isSimpleComparisionPossible(part) ? criteria.ne(parameters.next())
 						: createLikeRegexCriteriaOrThrow(part, property, criteria, parameters, true);
 			default:
 				throw new IllegalArgumentException("Unsupported keyword!");
@@ -278,7 +277,7 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	 * @return the criteria extended with the like-regex.
 	 */
 	private Criteria createLikeRegexCriteriaOrThrow(Part part, MongoPersistentProperty property, Criteria criteria,
-			PotentiallyConvertingIterator parameters, boolean shouldNegateExpression) {
+			Iterator<Object> parameters, boolean shouldNegateExpression) {
 
 		PropertyPath path = part.getProperty().getLeafProperty();
 
@@ -297,7 +296,7 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 					criteria = criteria.not();
 				}
 
-				return addAppropriateLikeRegexTo(criteria, part, parameters.nextConverted(property).toString());
+				return addAppropriateLikeRegexTo(criteria, part, parameters.next().toString());
 
 			case NEVER:
 				// intentional no-op
@@ -319,10 +318,10 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	 * @return
 	 */
 	private Criteria createContainingCriteria(Part part, MongoPersistentProperty property, Criteria criteria,
-			PotentiallyConvertingIterator parameters) {
+			Iterator<Object> parameters) {
 
 		if (property.isCollectionLike()) {
-			return criteria.in(nextAsArray(parameters, property));
+			return criteria.in(nextAsArray(parameters));
 		}
 
 		return addAppropriateLikeRegexTo(criteria, part, parameters.next().toString());
@@ -377,12 +376,13 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 				String.format("Expected parameter type of %s but got %s!", type, parameter.getClass()));
 	}
 
-	private Object[] nextAsArray(PotentiallyConvertingIterator iterator, MongoPersistentProperty property) {
-		Object next = iterator.nextConverted(property);
+	private Object[] nextAsArray(Iterator<Object> iterator) {
+
+		Object next = iterator.next();
 
 		if (next instanceof Collection) {
 			return ((Collection<?>) next).toArray();
-		} else if (next.getClass().isArray()) {
+		} else if (next != null && next.getClass().isArray()) {
 			return (Object[]) next;
 		}
 
@@ -390,61 +390,7 @@ class MongoQueryCreator extends AbstractQueryCreator<Query, Criteria> {
 	}
 
 	private String toLikeRegex(String source, Part part) {
-
-		Type type = part.getType();
-		String regex = prepareAndEscapeStringBeforeApplyingLikeRegex(source, part);
-
-		switch (type) {
-			case STARTING_WITH:
-				regex = "^" + regex;
-				break;
-			case ENDING_WITH:
-				regex = regex + "$";
-				break;
-			case CONTAINING:
-			case NOT_CONTAINING:
-				regex = ".*" + regex + ".*";
-				break;
-			case SIMPLE_PROPERTY:
-			case NEGATING_SIMPLE_PROPERTY:
-				regex = "^" + regex + "$";
-			default:
-		}
-
-		return regex;
-	}
-
-	private String prepareAndEscapeStringBeforeApplyingLikeRegex(String source, Part qpart) {
-
-		if (!ObjectUtils.nullSafeEquals(Type.LIKE, qpart.getType())) {
-			return PUNCTATION_PATTERN.matcher(source).find() ? Pattern.quote(source) : source;
-		}
-
-		if (source.equals("*")) {
-			return ".*";
-		}
-
-		StringBuilder sb = new StringBuilder();
-
-		boolean leadingWildcard = source.startsWith("*");
-		boolean trailingWildcard = source.endsWith("*");
-
-		String valueToUse = source.substring(leadingWildcard ? 1 : 0,
-				trailingWildcard ? source.length() - 1 : source.length());
-
-		if (PUNCTATION_PATTERN.matcher(valueToUse).find()) {
-			valueToUse = Pattern.quote(valueToUse);
-		}
-
-		if (leadingWildcard) {
-			sb.append(".*");
-		}
-		sb.append(valueToUse);
-		if (trailingWildcard) {
-			sb.append(".*");
-		}
-
-		return sb.toString();
+		return MongoRegexCreator.INSTANCE.toRegularExpression(source, part.getType());
 	}
 
 	private boolean isSpherical(MongoPersistentProperty property) {

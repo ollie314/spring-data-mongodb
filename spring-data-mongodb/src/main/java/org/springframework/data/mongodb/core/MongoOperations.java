@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Set;
 
 import org.springframework.data.geo.GeoResults;
+import org.springframework.data.mongodb.core.BulkOperations.BulkMode;
 import org.springframework.data.mongodb.core.aggregation.Aggregation;
 import org.springframework.data.mongodb.core.aggregation.AggregationResults;
 import org.springframework.data.mongodb.core.aggregation.TypedAggregation;
@@ -190,7 +191,7 @@ public interface MongoOperations {
 	<T> DBCollection createCollection(Class<T> entityClass);
 
 	/**
-	 * Create a collect with a name based on the provided entity class using the options.
+	 * Create a collection with a name based on the provided entity class using the options.
 	 * 
 	 * @param entityClass class that determines the collection to create
 	 * @param collectionOptions options to use when creating the collection.
@@ -207,7 +208,7 @@ public interface MongoOperations {
 	DBCollection createCollection(String collectionName);
 
 	/**
-	 * Create a collect with the provided name and options.
+	 * Create a collection with the provided name and options.
 	 * 
 	 * @param collectionName name of the collection
 	 * @param collectionOptions options to use when creating the collection.
@@ -291,6 +292,34 @@ public interface MongoOperations {
 	 * @since 1.7
 	 */
 	ScriptOperations scriptOps();
+
+	/**
+	 * Returns a new {@link BulkOperations} for the given collection.
+	 * 
+	 * @param mode the {@link BulkMode} to use for bulk operations, must not be {@literal null}.
+	 * @param collectionName the name of the collection to work on, must not be {@literal null} or empty.
+	 * @return {@link BulkOperations} on the named collection
+	 */
+	BulkOperations bulkOps(BulkMode mode, String collectionName);
+
+	/**
+	 * Returns a new {@link BulkOperations} for the given entity type.
+	 * 
+	 * @param mode the {@link BulkMode} to use for bulk operations, must not be {@literal null}.
+	 * @param entityType the name of the entity class, must not be {@literal null}.
+	 * @return {@link BulkOperations} on the named collection associated of the given entity class.
+	 */
+	BulkOperations bulkOps(BulkMode mode, Class<?> entityType);
+
+	/**
+	 * Returns a new {@link BulkOperations} for the given entity type and collection name.
+	 * 
+	 * @param mode the {@link BulkMode} to use for bulk operations, must not be {@literal null}.
+	 * @param entityClass the name of the entity class, must not be {@literal null}.
+	 * @param collectionName the name of the collection to work on, must not be {@literal null} or empty.
+	 * @return {@link BulkOperations} on the named collection associated with the given entity class.
+	 */
+	BulkOperations bulkOps(BulkMode mode, Class<?> entityType, String collectionName);
 
 	/**
 	 * Query for a list of objects of type T from the collection used by the entity class.
@@ -600,8 +629,8 @@ public interface MongoOperations {
 	<T> T findById(Object id, Class<T> entityClass, String collectionName);
 
 	/**
-	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify<a/>
-	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
+	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
+	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
 	 * 
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
 	 *          fields specification.
@@ -612,8 +641,8 @@ public interface MongoOperations {
 	<T> T findAndModify(Query query, Update update, Class<T> entityClass);
 
 	/**
-	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify<a/>
-	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
+	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
+	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query}.
 	 * 
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
 	 *          fields specification.
@@ -625,8 +654,8 @@ public interface MongoOperations {
 	<T> T findAndModify(Query query, Update update, Class<T> entityClass, String collectionName);
 
 	/**
-	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify<a/>
-	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
+	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
+	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
 	 * {@link FindAndModifyOptions} into account.
 	 * 
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
@@ -639,8 +668,8 @@ public interface MongoOperations {
 	<T> T findAndModify(Query query, Update update, FindAndModifyOptions options, Class<T> entityClass);
 
 	/**
-	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify<a/>
-	 * to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
+	 * Triggers <a href="http://docs.mongodb.org/manual/reference/method/db.collection.findAndModify/">findAndModify
+	 * <a/> to apply provided {@link Update} on documents matching {@link Criteria} of given {@link Query} taking
 	 * {@link FindAndModifyOptions} into account.
 	 * 
 	 * @param query the {@link Query} class that specifies the {@link Criteria} used to find a record and also an optional
@@ -728,9 +757,9 @@ public interface MongoOperations {
 	 * <p/>
 	 * If you object has an "Id' property, it will be set with the generated Id from MongoDB. If your Id property is a
 	 * String then MongoDB ObjectId will be used to populate that string. Otherwise, the conversion from ObjectId to your
-	 * property type will be handled by Spring's BeanWrapper class that leverages Type Conversion API. See <a
-	 * href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/validation.html#core-convert"
-	 * >Spring's Type Conversion"</a> for more details.
+	 * property type will be handled by Spring's BeanWrapper class that leverages Type Conversion API. See
+	 * <a href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/validation.html#core-convert" >
+	 * Spring's Type Conversion"</a> for more details.
 	 * <p/>
 	 * <p/>
 	 * Insert is used to initially store the object into the database. To update an existing object use the save method.
@@ -785,9 +814,9 @@ public interface MongoOperations {
 	 * <p/>
 	 * If you object has an "Id' property, it will be set with the generated Id from MongoDB. If your Id property is a
 	 * String then MongoDB ObjectId will be used to populate that string. Otherwise, the conversion from ObjectId to your
-	 * property type will be handled by Spring's BeanWrapper class that leverages Type Conversion API. See <a
-	 * href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/validation.html#core-convert"
-	 * >Spring's Type Conversion"</a> for more details.
+	 * property type will be handled by Spring's BeanWrapper class that leverages Type Conversion API. See
+	 * <a href="http://docs.spring.io/spring/docs/current/spring-framework-reference/html/validation.html#core-convert" >
+	 * Spring's Type Conversion"</a> for more details.
 	 * 
 	 * @param objectToSave the object to store in the collection
 	 */

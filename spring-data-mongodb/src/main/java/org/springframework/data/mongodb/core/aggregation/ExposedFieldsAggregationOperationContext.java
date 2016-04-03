@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2014 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,9 +24,10 @@ import com.mongodb.DBObject;
 /**
  * {@link AggregationOperationContext} that combines the available field references from a given
  * {@code AggregationOperationContext} and an {@link FieldsExposingAggregationOperation}.
- * 
+ *
  * @author Thomas Darimont
  * @author Oliver Gierke
+ * @author Mark Paluch
  * @since 1.4
  */
 class ExposedFieldsAggregationOperationContext implements AggregationOperationContext {
@@ -37,11 +38,12 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 	/**
 	 * Creates a new {@link ExposedFieldsAggregationOperationContext} from the given {@link ExposedFields}. Uses the given
 	 * {@link AggregationOperationContext} to perform a mapping to mongo types if necessary.
-	 * 
+	 *
 	 * @param exposedFields must not be {@literal null}.
 	 * @param rootContext must not be {@literal null}.
 	 */
-	public ExposedFieldsAggregationOperationContext(ExposedFields exposedFields, AggregationOperationContext rootContext) {
+	public ExposedFieldsAggregationOperationContext(ExposedFields exposedFields,
+			AggregationOperationContext rootContext) {
 
 		Assert.notNull(exposedFields, "ExposedFields must not be null!");
 		Assert.notNull(rootContext, "RootContext must not be null!");
@@ -79,7 +81,7 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 
 	/**
 	 * Returns a {@link FieldReference} to the given {@link Field} with the given {@code name}.
-	 * 
+	 *
 	 * @param field may be {@literal null}
 	 * @param name must not be {@literal null}
 	 * @return
@@ -88,6 +90,22 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 
 		Assert.notNull(name, "Name must not be null!");
 
+		FieldReference exposedField = resolveExposedField(field, name);
+		if (exposedField != null) {
+			return exposedField;
+		}
+
+		throw new IllegalArgumentException(String.format("Invalid reference '%s'!", name));
+	}
+
+	/**
+	 * Resolves a {@link field}/{@link name} for a {@link FieldReference} if possible.
+	 *
+	 * @param field may be {@literal null}
+	 * @param name must not be {@literal null}
+	 * @return the resolved reference or {@literal null}
+	 */
+	protected FieldReference resolveExposedField(Field field, String name) {
 		ExposedField exposedField = exposedFields.getField(name);
 
 		if (exposedField != null) {
@@ -111,7 +129,6 @@ class ExposedFieldsAggregationOperationContext implements AggregationOperationCo
 				return new FieldReference(new ExposedField(name, true));
 			}
 		}
-
-		throw new IllegalArgumentException(String.format("Invalid reference '%s'!", name));
+		return null;
 	}
 }

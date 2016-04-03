@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,16 +19,26 @@ import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.MalformedURLException;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Currency;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import org.bson.types.Code;
 import org.bson.types.ObjectId;
 import org.springframework.core.convert.ConversionFailedException;
 import org.springframework.core.convert.TypeDescriptor;
+import org.springframework.core.convert.converter.ConditionalConverter;
 import org.springframework.core.convert.converter.Converter;
+import org.springframework.core.convert.converter.ConverterFactory;
 import org.springframework.data.convert.ReadingConverter;
 import org.springframework.data.convert.WritingConverter;
 import org.springframework.data.mongodb.core.query.Term;
 import org.springframework.data.mongodb.core.script.NamedMongoScript;
+import org.springframework.util.Assert;
+import org.springframework.util.NumberUtils;
 import org.springframework.util.StringUtils;
 
 import com.mongodb.BasicDBObject;
@@ -48,6 +58,33 @@ abstract class MongoConverters {
 	 * Private constructor to prevent instantiation.
 	 */
 	private MongoConverters() {}
+
+	/**
+	 * Returns the converters to be registered.
+	 * 
+	 * @return
+	 * @since 1.9
+	 */
+	public static Collection<Object> getConvertersToRegister() {
+
+		List<Object> converters = new ArrayList<Object>();
+
+		converters.add(BigDecimalToStringConverter.INSTANCE);
+		converters.add(StringToBigDecimalConverter.INSTANCE);
+		converters.add(BigIntegerToStringConverter.INSTANCE);
+		converters.add(StringToBigIntegerConverter.INSTANCE);
+		converters.add(URLToStringConverter.INSTANCE);
+		converters.add(StringToURLConverter.INSTANCE);
+		converters.add(DBObjectToStringConverter.INSTANCE);
+		converters.add(TermToStringConverter.INSTANCE);
+		converters.add(NamedMongoScriptToDBObjectConverter.INSTANCE);
+		converters.add(DBObjectToNamedMongoScriptCoverter.INSTANCE);
+		converters.add(CurrencyToStringConverter.INSTANCE);
+		converters.add(StringToCurrencyConverter.INSTANCE);
+		converters.add(NumberToNumberConverterFactory.INSTANCE);
+
+		return converters;
+	}
 
 	/**
 	 * Simple singleton to convert {@link ObjectId}s to their {@link String} representation.
@@ -226,6 +263,115 @@ abstract class MongoConverters {
 			builder.append("value", new Code(source.getCode()));
 
 			return builder.get();
+		}
+	}
+
+	/**
+	 * {@link Converter} implementation converting {@link Currency} into its ISO 4217 {@link String} representation.
+	 * 
+	 * @author Christoph Strobl
+	 * @since 1.9
+	 */
+	@WritingConverter
+	public static enum CurrencyToStringConverter implements Converter<Currency, String> {
+
+		INSTANCE;
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
+		 */
+		@Override
+		public String convert(Currency source) {
+			return source == null ? null : source.getCurrencyCode();
+		}
+	}
+
+	/**
+	 * {@link Converter} implementation converting ISO 4217 {@link String} into {@link Currency}.
+	 * 
+	 * @author Christoph Strobl
+	 * @since 1.9
+	 */
+	@ReadingConverter
+	public static enum StringToCurrencyConverter implements Converter<String, Currency> {
+
+		INSTANCE;
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
+		 */
+		@Override
+		public Currency convert(String source) {
+			return StringUtils.hasText(source) ? Currency.getInstance(source) : null;
+		}
+	}
+
+	/**
+	 * {@link ConverterFactory} implementation using {@link NumberUtils} for number conversion and parsing. Additionally
+	 * deals with {@link AtomicInteger} and {@link AtomicLong} by calling {@code get()} before performing the actual
+	 * conversion.
+	 * 
+	 * @author Christoph Strobl
+	 * @since 1.9
+	 */
+	@WritingConverter
+	public static enum NumberToNumberConverterFactory implements ConverterFactory<Number, Number>,ConditionalConverter {
+
+		INSTANCE;
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.ConverterFactory#getConverter(java.lang.Class)
+		 */
+		@Override
+		public <T extends Number> Converter<Number, T> getConverter(Class<T> targetType) {
+			return new NumberToNumberConverter<T>(targetType);
+		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.ConditionalConverter#matches(org.springframework.core.convert.TypeDescriptor, org.springframework.core.convert.TypeDescriptor)
+		 */
+		@Override
+		public boolean matches(TypeDescriptor sourceType, TypeDescriptor targetType) {
+			return !sourceType.equals(targetType);
+		}
+
+		private final static class NumberToNumberConverter<T extends Number> implements Converter<Number, T> {
+
+			private final Class<T> targetType;
+
+			/**
+			 * Creates a new {@link NumberToNumberConverter} for the given target type.
+			 * 
+			 * @param targetType must not be {@literal null}.
+			 */
+			public NumberToNumberConverter(Class<T> targetType) {
+				
+				Assert.notNull(targetType, "Target type must not be null!");
+				
+				this.targetType = targetType;
+			}
+
+			/*
+			 * (non-Javadoc)
+			 * @see org.springframework.core.convert.converter.Converter#convert(java.lang.Object)
+			 */
+			@Override
+			public T convert(Number source) {
+
+				if (source instanceof AtomicInteger) {
+					return NumberUtils.convertNumberToTargetClass(((AtomicInteger) source).get(), this.targetType);
+				}
+
+				if (source instanceof AtomicLong) {
+					return NumberUtils.convertNumberToTargetClass(((AtomicLong) source).get(), this.targetType);
+				}
+
+				return NumberUtils.convertNumberToTargetClass(source, this.targetType);
+			}
 		}
 	}
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2011 the original author or authors.
+ * Copyright 2010-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,11 +15,14 @@
  */
 package org.springframework.data.mongodb.repository;
 
+import static org.hamcrest.Matchers.*;
 import static org.junit.Assert.*;
 
+import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Example;
 import org.springframework.test.context.ContextConfiguration;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
 
@@ -27,13 +30,18 @@ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
  * Integration tests for {@link ContactRepository}. Mostly related to mapping inheritance.
  * 
  * @author Oliver Gierke
+ * @author Mark Paluch
  */
 @RunWith(SpringJUnit4ClassRunner.class)
 @ContextConfiguration("config/MongoNamespaceIntegrationTests-context.xml")
 public class ContactRepositoryIntegrationTests {
 
-	@Autowired
-	ContactRepository repository;
+	@Autowired ContactRepository repository;
+
+	@Before
+	public void setUp() throws Exception {
+		repository.deleteAll();
+	}
 
 	@Test
 	public void readsAndWritesContactCorrectly() {
@@ -42,5 +50,16 @@ public class ContactRepositoryIntegrationTests {
 		Contact result = repository.save(person);
 
 		assertTrue(repository.findOne(result.getId().toString()) instanceof Person);
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findsContactByTypedExample() {
+
+		Person person = repository.save(new Person("Oliver", "Gierke"));
+
+		assertThat(repository.findOne(Example.of(person)), instanceOf(Person.class));
 	}
 }

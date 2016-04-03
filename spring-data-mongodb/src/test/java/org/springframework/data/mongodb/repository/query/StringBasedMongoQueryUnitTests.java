@@ -24,6 +24,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
+import javax.xml.bind.DatatypeConverter;
+
+import org.bson.BSON;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -40,7 +43,10 @@ import org.springframework.data.mongodb.core.query.BasicQuery;
 import org.springframework.data.mongodb.repository.Address;
 import org.springframework.data.mongodb.repository.Person;
 import org.springframework.data.mongodb.repository.Query;
-import org.springframework.data.repository.core.RepositoryMetadata;
+import org.springframework.data.projection.ProjectionFactory;
+import org.springframework.data.projection.SpelAwareProxyProjectionFactory;
+import org.springframework.data.repository.Repository;
+import org.springframework.data.repository.core.support.DefaultRepositoryMetadata;
 import org.springframework.data.repository.query.DefaultEvaluationContextProvider;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
 
@@ -62,7 +68,6 @@ public class StringBasedMongoQueryUnitTests {
 	SpelExpressionParser PARSER = new SpelExpressionParser();
 
 	@Mock MongoOperations operations;
-	@Mock RepositoryMetadata metadata;
 	@Mock DbRefResolver factory;
 
 	MongoConverter converter;
@@ -78,10 +83,7 @@ public class StringBasedMongoQueryUnitTests {
 	@Test
 	public void bindsSimplePropertyCorrectly() throws Exception {
 
-		Method method = SampleRepository.class.getMethod("findByLastname", String.class);
-		MongoQueryMethod queryMethod = new MongoQueryMethod(method, metadata, converter.getMappingContext());
-		StringBasedMongoQuery mongoQuery = new StringBasedMongoQuery(queryMethod, operations, PARSER,
-				DefaultEvaluationContextProvider.INSTANCE);
+		StringBasedMongoQuery mongoQuery = createQueryForMethod("findByLastname", String.class);
 		ConvertingParameterAccessor accesor = StubParameterAccessor.getAccessor(converter, "Matthews");
 
 		org.springframework.data.mongodb.core.query.Query query = mongoQuery.createQuery(accesor);
@@ -343,17 +345,39 @@ public class StringBasedMongoQueryUnitTests {
 		assertThat(query.getQueryObject(), is(reference.getQueryObject()));
 	}
 
+	/**
+	 * @see DATAMONGO-1290
+	 */
+	@Test
+	public void shouldSupportNonQuotedBinaryDataReplacement() throws Exception {
+
+		byte[] binaryData = "Matthews".getBytes("UTF-8");
+		ConvertingParameterAccessor accesor = StubParameterAccessor.getAccessor(converter, binaryData);
+		StringBasedMongoQuery mongoQuery = createQueryForMethod("findByLastnameAsBinary", byte[].class);
+
+		org.springframework.data.mongodb.core.query.Query query = mongoQuery.createQuery(accesor);
+		org.springframework.data.mongodb.core.query.Query reference = new BasicQuery("{'lastname' : { '$binary' : '"
+				+ DatatypeConverter.printBase64Binary(binaryData) + "', '$type' : " + BSON.B_GENERAL + "}}");
+
+		assertThat(query.getQueryObject(), is(reference.getQueryObject()));
+	}
+
 	private StringBasedMongoQuery createQueryForMethod(String name, Class<?>... parameters) throws Exception {
 
 		Method method = SampleRepository.class.getMethod(name, parameters);
-		MongoQueryMethod queryMethod = new MongoQueryMethod(method, metadata, converter.getMappingContext());
+		ProjectionFactory factory = new SpelAwareProxyProjectionFactory();
+		MongoQueryMethod queryMethod = new MongoQueryMethod(method, new DefaultRepositoryMetadata(SampleRepository.class),
+				factory, converter.getMappingContext());
 		return new StringBasedMongoQuery(queryMethod, operations, PARSER, DefaultEvaluationContextProvider.INSTANCE);
 	}
 
-	private interface SampleRepository {
+	private interface SampleRepository extends Repository<Person, Long> {
 
 		@Query("{ 'lastname' : ?0 }")
 		Person findByLastname(String lastname);
+
+		@Query("{ 'lastname' : ?0 }")
+		Person findByLastnameAsBinary(byte[] lastname);
 
 		@Query("{ 'lastname' : '?0' }")
 		Person findByLastnameQuoted(String lastname);

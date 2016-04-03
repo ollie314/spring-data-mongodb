@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2014 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.List;
 
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.core.annotation.AnnotationUtils;
 import org.springframework.data.geo.GeoPage;
 import org.springframework.data.geo.GeoResult;
@@ -29,6 +30,7 @@ import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.data.mongodb.repository.Meta;
 import org.springframework.data.mongodb.repository.Query;
+import org.springframework.data.projection.ProjectionFactory;
 import org.springframework.data.repository.core.RepositoryMetadata;
 import org.springframework.data.repository.query.QueryMethod;
 import org.springframework.data.util.ClassTypeInformation;
@@ -42,6 +44,7 @@ import org.springframework.util.StringUtils;
  * 
  * @author Oliver Gierke
  * @author Christoph Strobl
+ * @author Mark Paluch
  */
 public class MongoQueryMethod extends QueryMethod {
 
@@ -56,12 +59,15 @@ public class MongoQueryMethod extends QueryMethod {
 	/**
 	 * Creates a new {@link MongoQueryMethod} from the given {@link Method}.
 	 * 
-	 * @param method
+	 * @param method must not be {@literal null}.
+	 * @param metadata must not be {@literal null}.
+	 * @param projectionFactory must not be {@literal null}.
+	 * @param mappingContext must not be {@literal null}.
 	 */
-	public MongoQueryMethod(Method method, RepositoryMetadata metadata,
+	public MongoQueryMethod(Method method, RepositoryMetadata metadata, ProjectionFactory projectionFactory,
 			MappingContext<? extends MongoPersistentEntity<?>, MongoPersistentProperty> mappingContext) {
 
-		super(method, metadata);
+		super(method, metadata, projectionFactory);
 
 		Assert.notNull(mappingContext, "MappingContext must not be null!");
 
@@ -132,7 +138,8 @@ public class MongoQueryMethod extends QueryMethod {
 
 				MongoPersistentEntity<?> returnedEntity = mappingContext.getPersistentEntity(returnedObjectType);
 				MongoPersistentEntity<?> managedEntity = mappingContext.getPersistentEntity(domainClass);
-				returnedEntity = returnedEntity == null ? managedEntity : returnedEntity;
+				returnedEntity = returnedEntity == null || returnedEntity.getType().isInterface() ? managedEntity
+						: returnedEntity;
 				MongoPersistentEntity<?> collectionEntity = domainClass.isAssignableFrom(returnedObjectType) ? returnedEntity
 						: managedEntity;
 
@@ -186,7 +193,7 @@ public class MongoQueryMethod extends QueryMethod {
 	 * @return
 	 */
 	Query getQueryAnnotation() {
-		return method.getAnnotation(Query.class);
+		return AnnotatedElementUtils.findMergedAnnotation(method, Query.class);
 	}
 
 	TypeInformation<?> getReturnType() {
@@ -208,7 +215,7 @@ public class MongoQueryMethod extends QueryMethod {
 	 * @since 1.6
 	 */
 	Meta getMetaAnnotation() {
-		return method.getAnnotation(Meta.class);
+		return AnnotatedElementUtils.findMergedAnnotation(method, Meta.class);
 	}
 
 	/**

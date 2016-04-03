@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,16 +42,6 @@ import org.springframework.data.convert.ReadingConverter;
 import org.springframework.data.convert.ThreeTenBackPortConverters;
 import org.springframework.data.convert.WritingConverter;
 import org.springframework.data.mapping.model.SimpleTypeHolder;
-import org.springframework.data.mongodb.core.convert.MongoConverters.BigDecimalToStringConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.BigIntegerToStringConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.NamedMongoScriptToDBObjectConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.DBObjectToNamedMongoScriptCoverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.DBObjectToStringConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.StringToBigDecimalConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.StringToBigIntegerConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.StringToURLConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.TermToStringConverter;
-import org.springframework.data.mongodb.core.convert.MongoConverters.URLToStringConverter;
 import org.springframework.data.mongodb.core.mapping.MongoSimpleTypes;
 import org.springframework.data.util.CacheValue;
 import org.springframework.util.Assert;
@@ -112,17 +102,7 @@ public class CustomConversions {
 		// Add user provided converters to make sure they can override the defaults
 		toRegister.addAll(converters);
 		toRegister.add(CustomToStringConverter.INSTANCE);
-		toRegister.add(BigDecimalToStringConverter.INSTANCE);
-		toRegister.add(StringToBigDecimalConverter.INSTANCE);
-		toRegister.add(BigIntegerToStringConverter.INSTANCE);
-		toRegister.add(StringToBigIntegerConverter.INSTANCE);
-		toRegister.add(URLToStringConverter.INSTANCE);
-		toRegister.add(StringToURLConverter.INSTANCE);
-		toRegister.add(DBObjectToStringConverter.INSTANCE);
-		toRegister.add(TermToStringConverter.INSTANCE);
-		toRegister.add(NamedMongoScriptToDBObjectConverter.INSTANCE);
-		toRegister.add(DBObjectToNamedMongoScriptCoverter.INSTANCE);
-
+		toRegister.addAll(MongoConverters.getConvertersToRegister());
 		toRegister.addAll(JodaTimeConverters.getConvertersToRegister());
 		toRegister.addAll(GeoConverters.getConvertersToRegister());
 		toRegister.addAll(Jsr310Converters.getConvertersToRegister());
@@ -186,14 +166,15 @@ public class CustomConversions {
 			}
 
 			if (!added) {
-				throw new IllegalArgumentException("Given set contains element that is neither Converter nor ConverterFactory!");
+				throw new IllegalArgumentException(
+						"Given set contains element that is neither Converter nor ConverterFactory!");
 			}
 		}
 	}
 
 	/**
-	 * Registers a conversion for the given converter. Inspects either generics or the {@link ConvertiblePair}s returned
-	 * by a {@link GenericConverter}.
+	 * Registers a conversion for the given converter. Inspects either generics of {@link Converter} and
+	 * {@link ConverterFactory} or the {@link ConvertiblePair}s returned by a {@link GenericConverter}.
 	 * 
 	 * @param converter
 	 */
@@ -208,6 +189,10 @@ public class CustomConversions {
 			for (ConvertiblePair pair : genericConverter.getConvertibleTypes()) {
 				register(new ConverterRegistration(pair, isReading, isWriting));
 			}
+		} else if (converter instanceof ConverterFactory) {
+
+			Class<?>[] arguments = GenericTypeResolver.resolveTypeArguments(converter.getClass(), ConverterFactory.class);
+			register(new ConverterRegistration(arguments[0], arguments[1], isReading, isWriting));
 		} else if (converter instanceof Converter) {
 			Class<?>[] arguments = GenericTypeResolver.resolveTypeArguments(converter.getClass(), Converter.class);
 			register(new ConverterRegistration(arguments[0], arguments[1], isReading, isWriting));
@@ -412,6 +397,10 @@ public class CustomConversions {
 
 		INSTANCE;
 
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.GenericConverter#getConvertibleTypes()
+		 */
 		public Set<ConvertiblePair> getConvertibleTypes() {
 
 			ConvertiblePair localeToString = new ConvertiblePair(Locale.class, String.class);
@@ -420,6 +409,10 @@ public class CustomConversions {
 			return new HashSet<ConvertiblePair>(Arrays.asList(localeToString, booleanToString));
 		}
 
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.core.convert.converter.GenericConverter#convert(java.lang.Object, org.springframework.core.convert.TypeDescriptor, org.springframework.core.convert.TypeDescriptor)
+		 */
 		public Object convert(Object source, TypeDescriptor sourceType, TypeDescriptor targetType) {
 			return source.toString();
 		}

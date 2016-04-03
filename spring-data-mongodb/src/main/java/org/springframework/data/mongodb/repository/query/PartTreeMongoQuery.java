@@ -20,10 +20,13 @@ import org.springframework.data.mongodb.core.MongoOperations;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.data.mongodb.core.query.BasicQuery;
+import org.springframework.data.mongodb.core.query.Field;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.TextCriteria;
 import org.springframework.data.repository.query.QueryMethod;
 import org.springframework.data.repository.query.RepositoryQuery;
+import org.springframework.data.repository.query.ResultProcessor;
+import org.springframework.data.repository.query.ReturnedType;
 import org.springframework.data.repository.query.parser.PartTree;
 import org.springframework.util.StringUtils;
 
@@ -41,6 +44,7 @@ public class PartTreeMongoQuery extends AbstractMongoQuery {
 	private final PartTree tree;
 	private final boolean isGeoNearQuery;
 	private final MappingContext<?, MongoPersistentProperty> context;
+	private final ResultProcessor processor;
 
 	/**
 	 * Creates a new {@link PartTreeMongoQuery} from the given {@link QueryMethod} and {@link MongoTemplate}.
@@ -51,7 +55,9 @@ public class PartTreeMongoQuery extends AbstractMongoQuery {
 	public PartTreeMongoQuery(MongoQueryMethod method, MongoOperations mongoOperations) {
 
 		super(method, mongoOperations);
-		this.tree = new PartTree(method.getName(), method.getEntityInformation().getJavaType());
+
+		this.processor = method.getResultProcessor();
+		this.tree = new PartTree(method.getName(), processor.getReturnedType().getDomainType());
 		this.isGeoNearQuery = method.isGeoNearQuery();
 		this.context = mongoOperations.getConverter().getMappingContext();
 	}
@@ -87,6 +93,18 @@ public class PartTreeMongoQuery extends AbstractMongoQuery {
 		String fieldSpec = this.getQueryMethod().getFieldSpecification();
 
 		if (!StringUtils.hasText(fieldSpec)) {
+
+			ReturnedType returnedType = processor.withDynamicProjection(accessor).getReturnedType();
+
+			if (returnedType.isProjecting()) {
+
+				Field fields = query.fields();
+
+				for (String field : returnedType.getInputProperties()) {
+					fields.include(field);
+				}
+			}
+
 			return query;
 		}
 

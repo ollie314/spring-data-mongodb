@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2014 the original author or authors.
+ * Copyright 2010-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import org.springframework.data.domain.Example;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
@@ -43,6 +44,7 @@ import org.springframework.util.Assert;
  * @author Oliver Gierke
  * @author Christoph Strobl
  * @author Thomas Darimont
+ * @author Mark Paluch
  */
 public class SimpleMongoRepository<T, ID extends Serializable> implements MongoRepository<T, ID> {
 
@@ -53,7 +55,7 @@ public class SimpleMongoRepository<T, ID extends Serializable> implements MongoR
 	 * Creates a new {@link SimpleMongoRepository} for the given {@link MongoEntityInformation} and {@link MongoTemplate}.
 	 * 
 	 * @param metadata must not be {@literal null}.
-	 * @param template must not be {@literal null}.
+	 * @param mongoOperations must not be {@literal null}.
 	 */
 	public SimpleMongoRepository(MongoEntityInformation<T, ID> metadata, MongoOperations mongoOperations) {
 
@@ -259,6 +261,93 @@ public class SimpleMongoRepository<T, ID extends Serializable> implements MongoR
 		return list;
 	}
 
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.MongoRepository#findAllByExample(org.springframework.data.domain.Example, org.springframework.data.domain.Pageable)
+	 */
+	@Override
+	public <S extends T> Page<S> findAll(Example<S> example, Pageable pageable) {
+
+		Assert.notNull(example, "Sample must not be null!");
+
+		Query q = new Query(new Criteria().alike(example)).with(pageable);
+
+		long count = mongoOperations.count(q, example.getProbeType(), entityInformation.getCollectionName());
+
+		if (count == 0) {
+			return new PageImpl<S>(Collections.<S> emptyList());
+		}
+
+		return new PageImpl<S>(mongoOperations.find(q, example.getProbeType(), entityInformation.getCollectionName()),
+				pageable, count);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.MongoRepository#findAllByExample(org.springframework.data.domain.Example, org.springframework.data.domain.Sort)
+	 */
+	@Override
+	public <S extends T> List<S> findAll(Example<S> example, Sort sort) {
+
+		Assert.notNull(example, "Sample must not be null!");
+
+		Query q = new Query(new Criteria().alike(example));
+
+		if (sort != null) {
+			q.with(sort);
+		}
+
+		return mongoOperations.find(q, example.getProbeType(), entityInformation.getCollectionName());
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.repository.MongoRepository#findAllByExample(org.springframework.data.domain.Example)
+	 */
+	@Override
+	public <S extends T> List<S> findAll(Example<S> example) {
+		return findAll(example, (Sort) null);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.repository.query.QueryByExampleExecutor#findOne(org.springframework.data.domain.Example)
+	 */
+	@Override
+	public <S extends T> S findOne(Example<S> example) {
+
+		Assert.notNull(example, "Sample must not be null!");
+
+		Query q = new Query(new Criteria().alike(example));
+		return mongoOperations.findOne(q, example.getProbeType(), entityInformation.getCollectionName());
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.repository.query.QueryByExampleExecutor#count(org.springframework.data.domain.Example)
+	 */
+	@Override
+	public <S extends T> long count(Example<S> example) {
+
+		Assert.notNull(example, "Sample must not be null!");
+
+		Query q = new Query(new Criteria().alike(example));
+		return mongoOperations.count(q, example.getProbeType(), entityInformation.getCollectionName());
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.repository.query.QueryByExampleExecutor#exists(org.springframework.data.domain.Example)
+	 */
+	@Override
+	public <S extends T> boolean exists(Example<S> example) {
+
+		Assert.notNull(example, "Sample must not be null!");
+
+		Query q = new Query(new Criteria().alike(example));
+		return mongoOperations.exists(q, example.getProbeType(), entityInformation.getCollectionName());
+	}
+
 	private List<T> findAll(Query query) {
 
 		if (query == null) {
@@ -291,4 +380,5 @@ public class SimpleMongoRepository<T, ID extends Serializable> implements MongoR
 	private static int tryDetermineRealSizeOrReturn(Iterable<?> iterable, int defaultSize) {
 		return iterable == null ? 0 : (iterable instanceof Collection) ? ((Collection<?>) iterable).size() : defaultSize;
 	}
+
 }

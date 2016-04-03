@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,6 +34,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.domain.Example;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Range;
@@ -55,6 +56,7 @@ import org.springframework.data.mongodb.repository.Person.Sex;
 import org.springframework.data.mongodb.repository.SampleEvaluationContextExtension.SampleSecurityContextHolder;
 import org.springframework.data.querydsl.QSort;
 import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
+import org.springframework.test.util.ReflectionTestUtils;
 
 /**
  * Base class for tests for {@link PersonRepository}.
@@ -62,6 +64,7 @@ import org.springframework.test.context.junit4.SpringJUnit4ClassRunner;
  * @author Oliver Gierke
  * @author Thomas Darimont
  * @author Christoph Strobl
+ * @author Mark Paluch
  */
 @RunWith(SpringJUnit4ClassRunner.class)
 public abstract class AbstractPersonRepositoryIntegrationTests {
@@ -1221,4 +1224,41 @@ public abstract class AbstractPersonRepositoryIntegrationTests {
 		assertThat(users, hasSize(1));
 		assertThat(users.get(0), is(dave));
 	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findByExampleShouldResolveStuffCorrectly() {
+
+		Person sample = new Person();
+		sample.setLastname("Matthews");
+
+		// needed to tweak stuff a bit since some field are automatically set - so we need to undo this
+		ReflectionTestUtils.setField(sample, "id", null);
+		ReflectionTestUtils.setField(sample, "createdAt", null);
+		ReflectionTestUtils.setField(sample, "email", null);
+
+		Page<Person> result = repository.findAll(Example.of(sample), new PageRequest(0, 10));
+		assertThat(result.getNumberOfElements(), is(2));
+	}
+
+	/**
+	 * @see DATAMONGO-1245
+	 */
+	@Test
+	public void findAllByExampleShouldResolveStuffCorrectly() {
+
+		Person sample = new Person();
+		sample.setLastname("Matthews");
+
+		// needed to tweak stuff a bit since some field are automatically set - so we need to undo this
+		ReflectionTestUtils.setField(sample, "id", null);
+		ReflectionTestUtils.setField(sample, "createdAt", null);
+		ReflectionTestUtils.setField(sample, "email", null);
+
+		List<Person> result = repository.findAll(Example.of(sample));
+		assertThat(result.size(), is(2));
+	}
+
 }

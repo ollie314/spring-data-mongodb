@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2014 the original author or authors.
+ * Copyright 2010-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,19 +18,23 @@ package org.springframework.data.mongodb.repository;
 import java.io.Serializable;
 import java.util.List;
 
+import org.springframework.data.domain.Example;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.repository.NoRepositoryBean;
 import org.springframework.data.repository.PagingAndSortingRepository;
+import org.springframework.data.repository.query.QueryByExampleExecutor;
 
 /**
  * Mongo specific {@link org.springframework.data.repository.Repository} interface.
- * 
+ *
  * @author Oliver Gierke
  * @author Christoph Strobl
  * @author Thomas Darimont
+ * @author Mark Paluch
  */
 @NoRepositoryBean
-public interface MongoRepository<T, ID extends Serializable> extends PagingAndSortingRepository<T, ID> {
+public interface MongoRepository<T, ID extends Serializable>
+		extends PagingAndSortingRepository<T, ID>, QueryByExampleExecutor<T> {
 
 	/*
 	 * (non-Javadoc)
@@ -54,7 +58,7 @@ public interface MongoRepository<T, ID extends Serializable> extends PagingAndSo
 	 * Inserts the given a given entity. Assumes the instance to be new to be able to apply insertion optimizations. Use
 	 * the returned instance for further operations as the save operation might have changed the entity instance
 	 * completely. Prefer using {@link #save(Object)} instead to avoid the usage of store-specific API.
-	 * 
+	 *
 	 * @param entity must not be {@literal null}.
 	 * @return the saved entity
 	 * @since 1.7
@@ -65,10 +69,21 @@ public interface MongoRepository<T, ID extends Serializable> extends PagingAndSo
 	 * Inserts the given entities. Assumes the given entities to have not been persisted yet and thus will optimize the
 	 * insert over a call to {@link #save(Iterable)}. Prefer using {@link #save(Iterable)} to avoid the usage of store
 	 * specific API.
-	 * 
+	 *
 	 * @param entities must not be {@literal null}.
 	 * @return the saved entities
 	 * @since 1.7
 	 */
 	<S extends T> List<S> insert(Iterable<S> entities);
+
+	/* (non-Javadoc)
+	 * @see org.springframework.data.repository.query.QueryByExampleExecutor#findAll(org.springframework.data.domain.Example)
+	 */
+	<S extends T> List<S> findAll(Example<S> example);
+
+	/* (non-Javadoc)
+	 * @see org.springframework.data.repository.query.QueryByExampleExecutor#findAll(org.springframework.data.domain.Example, org.springframework.data.domain.Sort)
+	 */
+	<S extends T> List<S> findAll(Example<S> example, Sort sort);
+
 }

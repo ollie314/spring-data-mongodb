@@ -29,7 +29,7 @@
 		<project.type>multi</project.type>
 		<dist.id>spring-data-mongodb</dist.id>
 		<springdata.commons>1.12.0.BUILD-SNAPSHOT</springdata.commons>
-		<mongo>2.13.0</mongo>
+		<mongo>2.14.0</mongo>
 		<mongo.osgi>2.13.0</mongo.osgi>
 	</properties>
 
@@ -167,6 +167,19 @@
 				</repository>
 			</repositories>
 
+		</profile>
+
+		<profile>
+			<id>release</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.jfrog.buildinfo</groupId>
+						<artifactId>artifactory-maven-plugin</artifactId>
+						<inherited>false</inherited>
+					</plugin>
+				</plugins>
+			</build>
 		</profile>
 
 	</profiles>

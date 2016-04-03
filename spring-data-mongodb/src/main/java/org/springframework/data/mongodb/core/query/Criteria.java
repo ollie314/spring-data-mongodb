@@ -22,9 +22,11 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map.Entry;
 import java.util.regex.Pattern;
 
 import org.bson.BSON;
+import org.springframework.data.domain.Example;
 import org.springframework.data.geo.Circle;
 import org.springframework.data.geo.Point;
 import org.springframework.data.geo.Shape;
@@ -88,6 +90,30 @@ public class Criteria implements CriteriaDefinition {
 	}
 
 	/**
+	 * Static factory method to create a {@link Criteria} matching an example object.
+	 * 
+	 * @param example must not be {@literal null}.
+	 * @return
+	 * @see Criteria#alike(Example)
+	 * @since 1.8
+	 */
+	public static Criteria byExample(Object example) {
+		return byExample(Example.of(example));
+	}
+
+	/**
+	 * Static factory method to create a {@link Criteria} matching an example object.
+	 * 
+	 * @param example must not be {@literal null}.
+	 * @return
+	 * @see Criteria#alike(Example)
+	 * @since 1.8
+	 */
+	public static Criteria byExample(Example<?> example) {
+		return new Criteria().alike(example);
+	}
+
+	/**
 	 * Static factory method to create a Criteria using the provided key
 	 * 
 	 * @return
@@ -118,7 +144,7 @@ public class Criteria implements CriteriaDefinition {
 	}
 
 	private boolean lastOperatorWasNot() {
-		return this.criteria.size() > 0 && "$not".equals(this.criteria.keySet().toArray()[this.criteria.size() - 1]);
+		return !this.criteria.isEmpty() && "$not".equals(this.criteria.keySet().toArray()[this.criteria.size() - 1]);
 	}
 
 	/**
@@ -190,8 +216,8 @@ public class Criteria implements CriteriaDefinition {
 	 */
 	public Criteria in(Object... o) {
 		if (o.length > 1 && o[1] instanceof Collection) {
-			throw new InvalidMongoDbApiUsageException(
-					"You can only pass in one argument of type " + o[1].getClass().getName());
+			throw new InvalidMongoDbApiUsageException("You can only pass in one argument of type "
+					+ o[1].getClass().getName());
 		}
 		criteria.put("$in", Arrays.asList(o));
 		return this;
@@ -498,6 +524,20 @@ public class Criteria implements CriteriaDefinition {
 	}
 
 	/**
+	 * Creates a criterion using the given object as a pattern.
+	 * 
+	 * @param sample
+	 * @return
+	 * @since 1.8
+	 */
+	public Criteria alike(Example<?> sample) {
+
+		criteria.put("$sample", sample);
+		this.criteriaChain.add(this);
+		return this;
+	}
+
+	/**
 	 * Creates an 'or' criteria using the $or operator for all of the provided criteria
 	 * <p>
 	 * Note that mongodb doesn't support an $or operator to be wrapped in a $not operator.
@@ -542,8 +582,8 @@ public class Criteria implements CriteriaDefinition {
 	private Criteria registerCriteriaChainElement(Criteria criteria) {
 
 		if (lastOperatorWasNot()) {
-			throw new IllegalArgumentException(
-					"operator $not is not allowed around criteria chain element: " + criteria.getCriteriaObject());
+			throw new IllegalArgumentException("operator $not is not allowed around criteria chain element: "
+					+ criteria.getCriteriaObject());
 		} else {
 			criteriaChain.add(criteria);
 		}
@@ -581,9 +621,10 @@ public class Criteria implements CriteriaDefinition {
 		DBObject dbo = new BasicDBObject();
 		boolean not = false;
 
-		for (String k : this.criteria.keySet()) {
+		for (Entry<String, Object> entry : criteria.entrySet()) {
 
-			Object value = this.criteria.get(k);
+			String key = entry.getKey();
+			Object value = entry.getValue();
 
 			if (requiresGeoJsonFormat(value)) {
 				value = new BasicDBObject("$geometry", value);
@@ -591,14 +632,14 @@ public class Criteria implements CriteriaDefinition {
 
 			if (not) {
 				DBObject notDbo = new BasicDBObject();
-				notDbo.put(k, value);
+				notDbo.put(key, value);
 				dbo.put("$not", notDbo);
 				not = false;
 			} else {
-				if ("$not".equals(k) && value == null) {
+				if ("$not".equals(key) && value == null) {
 					not = true;
 				} else {
-					dbo.put(k, value);
+					dbo.put(key, value);
 				}
 			}
 		}

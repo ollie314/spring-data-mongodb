@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,6 +42,7 @@ import com.mongodb.DBObject;
  * @author Thomas Darimont
  * @author Oliver Gierke
  * @author Christoph Strobl
+ * @author Mark Paluch
  * @since 1.3
  */
 public class ProjectionOperation implements FieldsExposingAggregationOperation {
@@ -104,8 +105,8 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 	 */
 	private ProjectionOperation andReplaceLastOneWith(Projection projection) {
 
-		List<Projection> projections = this.projections.isEmpty() ? Collections.<Projection> emptyList() : this.projections
-				.subList(0, this.projections.size() - 1);
+		List<Projection> projections = this.projections.isEmpty() ? Collections.<Projection> emptyList()
+				: this.projections.subList(0, this.projections.size() - 1);
 		return new ProjectionOperation(projections, Arrays.asList(projection));
 	}
 
@@ -240,6 +241,24 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 		 * @return
 		 */
 		public abstract ProjectionOperation as(String alias);
+
+		/**
+		 * Apply a conditional projection using {@link ConditionalOperator}.
+		 *
+		 * @param conditionalOperator must not be {@literal null}.
+		 * @return never {@literal null}.
+		 * @since 1.10
+		 */
+		public abstract ProjectionOperation applyCondition(ConditionalOperator conditionalOperator);
+
+		/**
+		 * Apply a conditional value replacement for {@literal null} values using {@link IfNullOperator}.
+		 *
+		 * @param ifNullOperator must not be {@literal null}.
+		 * @return never {@literal null}.
+		 * @since 1.10
+		 */
+		public abstract ProjectionOperation applyCondition(IfNullOperator ifNullOperator);
 	}
 
 	/**
@@ -341,7 +360,8 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 				return new BasicDBObject(getExposedField().getName(), toMongoExpression(context, expression, params));
 			}
 
-			protected static Object toMongoExpression(AggregationOperationContext context, String expression, Object[] params) {
+			protected static Object toMongoExpression(AggregationOperationContext context, String expression,
+					Object[] params) {
 				return TRANSFORMER.transform(expression, context, params);
 			}
 		}
@@ -352,6 +372,7 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 	 * 
 	 * @author Oliver Gierke
 	 * @author Thomas Darimont
+	 * @author Christoph Strobl
 	 */
 	public static class ProjectionOperationBuilder extends AbstractProjectionOperationBuilder {
 
@@ -369,7 +390,8 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 		 * @param operation must not be {@literal null}.
 		 * @param previousProjection the previous operation projection, may be {@literal null}.
 		 */
-		public ProjectionOperationBuilder(String name, ProjectionOperation operation, OperationProjection previousProjection) {
+		public ProjectionOperationBuilder(String name, ProjectionOperation operation,
+				OperationProjection previousProjection) {
 			super(name, operation);
 
 			this.name = name;
@@ -418,7 +440,7 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 		/**
 		 * Allows to specify an alias for the previous projection operation.
 		 * 
-		 * @param string
+		 * @param alias
 		 * @return
 		 */
 		@Override
@@ -433,6 +455,28 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 			}
 
 			return this.operation.and(new FieldProjection(Fields.field(alias, name), null));
+		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.core.aggregation.ProjectionOperation.AbstractProjectionOperationBuilder#transform(org.springframework.data.mongodb.core.aggregation.ConditionalOperator)
+		 */
+		@Override
+		public ProjectionOperation applyCondition(ConditionalOperator conditionalOperator) {
+
+			Assert.notNull(conditionalOperator, "ConditionalOperator must not be null!");
+			return this.operation.and(new ExpressionProjection(Fields.field(name), conditionalOperator));
+		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.core.aggregation.ProjectionOperation.AbstractProjectionOperationBuilder#transform(org.springframework.data.mongodb.core.aggregation.IfNullOperator)
+		 */
+		@Override
+		public ProjectionOperation applyCondition(IfNullOperator ifNullOperator) {
+
+			Assert.notNull(ifNullOperator, "IfNullOperator must not be null!");
+			return this.operation.and(new ExpressionProjection(Fields.field(name), ifNullOperator));
 		}
 
 		/**
@@ -562,8 +606,39 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 			return project("mod", Fields.field(fieldReference));
 		}
 
+		/**
+		 * Generates a {@code $size} expression that returns the size of the array held by the given field. <br />
+		 *
+		 * @return never {@literal null}.
+		 * @since 1.7
+		 */
 		public ProjectionOperationBuilder size() {
 			return project("size");
+		}
+
+		/**
+		 * Generates a {@code $slice} expression that returns a subset of the array held by the given field. <br />
+		 * If {@literal n} is positive, $slice returns up to the first n elements in the array. <br />
+		 * If {@literal n} is negative, $slice returns up to the last n elements in the array.
+		 *
+		 * @param count max number of elements.
+		 * @return never {@literal null}.
+		 * @since 1.10
+		 */
+		public ProjectionOperationBuilder slice(int count) {
+			return project("slice", count);
+		}
+
+		/**
+		 * Generates a {@code $slice} expression that returns a subset of the array held by the given field. <br />
+		 *
+		 * @param count max number of elements. Must not be negative.
+		 * @param offset the offset within the array to start from.
+		 * @return never {@literal null}.
+		 * @since 1.10
+		 */
+		public ProjectionOperationBuilder slice(int count, int offset) {
+			return project("slice", offset, count);
 		}
 
 		/* 
@@ -732,7 +807,7 @@ public class ProjectionOperation implements FieldsExposingAggregationOperation {
 				this.values = Arrays.asList(values);
 			}
 
-			/* 
+			/*
 			 * (non-Javadoc)
 			 * @see org.springframework.data.mongodb.core.aggregation.ProjectionOperation.Projection#toDBObject(org.springframework.data.mongodb.core.aggregation.AggregationOperationContext)
 			 */

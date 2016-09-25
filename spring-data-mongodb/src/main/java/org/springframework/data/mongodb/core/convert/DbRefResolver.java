@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,9 @@
  */
 package org.springframework.data.mongodb.core.convert;
 
+import java.util.List;
+
+import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 
@@ -64,4 +67,16 @@ public interface DbRefResolver {
 	 * @since 1.7
 	 */
 	DBObject fetch(DBRef dbRef);
+
+	/**
+	 * Loads a given {@link List} of {@link DBRef}s from the datasource in one batch. The resulting {@link List} of
+	 * {@link DBObject} will reflect the ordering of the {@link DBRef} passed in.<br />
+	 * The {@link DBRef} elements in the list must not reference different collections.
+	 *
+	 * @param dbRefs must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @throws InvalidDataAccessApiUsageException in case not all {@link DBRef} target the same collection.
+	 * @since 1.10
+	 */
+	List<DBObject> bulkFetch(List<DBRef> dbRefs);
 }

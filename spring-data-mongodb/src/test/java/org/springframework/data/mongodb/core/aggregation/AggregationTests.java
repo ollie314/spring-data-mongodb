@@ -20,6 +20,7 @@ import static org.junit.Assert.*;
 import static org.junit.Assume.*;
 import static org.springframework.data.domain.Sort.Direction.*;
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.*;
+import static org.springframework.data.mongodb.core.aggregation.Fields.*;
 import static org.springframework.data.mongodb.core.query.Criteria.*;
 import static org.springframework.data.mongodb.test.util.IsBsonObject.*;
 
@@ -55,6 +56,8 @@ import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.Venue;
 import org.springframework.data.mongodb.core.aggregation.AggregationTests.CarDescriptor.Entry;
 import org.springframework.data.mongodb.core.index.GeospatialIndex;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.repository.Person;
@@ -78,6 +81,7 @@ import com.mongodb.util.JSON;
  * @author Oliver Gierke
  * @author Christoph Strobl
  * @author Mark Paluch
+ * @author Nikolay Bogdanov
  */
 @RunWith(SpringJUnit4ClassRunner.class)
 @ContextConfiguration("classpath:infrastructure.xml")
@@ -129,6 +133,8 @@ public class AggregationTests {
 		mongoTemplate.dropCollection(Reservation.class);
 		mongoTemplate.dropCollection(Venue.class);
 		mongoTemplate.dropCollection(MeterData.class);
+		mongoTemplate.dropCollection(LineItem.class);
+		mongoTemplate.dropCollection(InventoryItem.class);
 	}
 
 	/**
@@ -239,6 +245,68 @@ public class AggregationTests {
 
 		assertThat(tagCount, is(notNullValue()));
 		assertThat(tagCount.size(), is(0));
+	}
+
+	/**
+	 * @see DATAMONGO-1391
+	 */
+	@Test
+	public void shouldUnwindWithIndex() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(THREE_DOT_TWO));
+
+		DBCollection coll = mongoTemplate.getCollection(INPUT_COLLECTION);
+
+		coll.insert(createDocument("Doc1", "spring", "mongodb", "nosql"));
+		coll.insert(createDocument("Doc2"));
+
+		Aggregation agg = newAggregation( //
+				project("tags"), //
+				unwind("tags", "n"), //
+				project("n") //
+						.and("tag").previousOperation(), //
+				sort(DESC, "n") //
+		);
+
+		AggregationResults<TagCount> results = mongoTemplate.aggregate(agg, INPUT_COLLECTION, TagCount.class);
+
+		assertThat(results, is(notNullValue()));
+
+		List<TagCount> tagCount = results.getMappedResults();
+
+		assertThat(tagCount, is(notNullValue()));
+		assertThat(tagCount.size(), is(3));
+	}
+
+	/**
+	 * @see DATAMONGO-1391
+	 */
+	@Test
+	public void shouldUnwindPreserveEmpty() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(THREE_DOT_TWO));
+
+		DBCollection coll = mongoTemplate.getCollection(INPUT_COLLECTION);
+
+		coll.insert(createDocument("Doc1", "spring", "mongodb", "nosql"));
+		coll.insert(createDocument("Doc2"));
+
+		Aggregation agg = newAggregation( //
+				project("tags"), //
+				unwind("tags", "n", true), //
+				sort(DESC, "n") //
+		);
+
+		AggregationResults<DBObject> results = mongoTemplate.aggregate(agg, INPUT_COLLECTION, DBObject.class);
+
+		assertThat(results, is(notNullValue()));
+
+		List<DBObject> tagCount = results.getMappedResults();
+
+		assertThat(tagCount, is(notNullValue()));
+		assertThat(tagCount.size(), is(4));
+		assertThat(tagCount.get(0), isBsonObject().containing("n", 2L));
+		assertThat(tagCount.get(3), isBsonObject().notContaining("n"));
 	}
 
 	@Test
@@ -421,6 +489,250 @@ public class AggregationTests {
 	}
 
 	/**
+	 * @see DATAMONGO-861
+	 * @see https://docs.mongodb.com/manual/reference/operator/aggregation/cond/#example
+	 */
+	@Test
+	public void aggregationUsingConditionalProjectionToCalculateDiscount() {
+
+		/*
+		db.inventory.aggregate(
+		[
+		  {
+		     $project:
+		       {
+		         item: 1,
+		         discount:
+		           {
+		             $cond: { if: { $gte: [ "$qty", 250 ] }, then: 30, else: 20 }
+		           }
+		       }
+		  }
+		]
+		)
+		 */
+
+		mongoTemplate.insert(new InventoryItem(1, "abc1", 300));
+		mongoTemplate.insert(new InventoryItem(2, "abc2", 200));
+		mongoTemplate.insert(new InventoryItem(3, "xyz1", 250));
+
+		TypedAggregation<InventoryItem> aggregation = newAggregation(InventoryItem.class, //
+				project("item") //
+						.and("discount")//
+						.applyCondition(ConditionalOperator.newBuilder().when(Criteria.where("qty").gte(250)) //
+								.then(30) //
+								.otherwise(20)));
+
+		assertThat(aggregation.toString(), is(notNullValue()));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(aggregation, DBObject.class);
+		assertThat(result.getMappedResults().size(), is(3));
+
+		DBObject first = result.getMappedResults().get(0);
+		assertThat(first.get("_id"), is((Object) 1));
+		assertThat(first.get("discount"), is((Object) 30));
+
+		DBObject second = result.getMappedResults().get(1);
+		assertThat(second.get("_id"), is((Object) 2));
+		assertThat(second.get("discount"), is((Object) 20));
+
+		DBObject third = result.getMappedResults().get(2);
+		assertThat(third.get("_id"), is((Object) 3));
+		assertThat(third.get("discount"), is((Object) 30));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 * @see https://docs.mongodb.com/manual/reference/operator/aggregation/ifNull/#example
+	 */
+	@Test
+	public void aggregationUsingIfNullToProjectSaneDefaults() {
+
+		/*
+		db.inventory.aggregate(
+		[
+		  {
+		     $project: {
+		        item: 1,
+		        description: { $ifNull: [ "$description", "Unspecified" ] }
+		     }
+		  }
+		]
+		)
+		 */
+
+		mongoTemplate.insert(new InventoryItem(1, "abc1", "product 1", 300));
+		mongoTemplate.insert(new InventoryItem(2, "abc2", 200));
+		mongoTemplate.insert(new InventoryItem(3, "xyz1", 250));
+
+		TypedAggregation<InventoryItem> aggregation = newAggregation(InventoryItem.class, //
+				project("item") //
+						.and(ifNull("description", "Unspecified")) //
+						.as("description")//
+		);
+
+		assertThat(aggregation.toString(), is(notNullValue()));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(aggregation, DBObject.class);
+		assertThat(result.getMappedResults().size(), is(3));
+
+		DBObject first = result.getMappedResults().get(0);
+		assertThat(first.get("_id"), is((Object) 1));
+		assertThat(first.get("description"), is((Object) "product 1"));
+
+		DBObject second = result.getMappedResults().get(1);
+		assertThat(second.get("_id"), is((Object) 2));
+		assertThat(second.get("description"), is((Object) "Unspecified"));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void aggregationUsingConditionalProjection() {
+
+		TypedAggregation<ZipInfo> aggregation = newAggregation(ZipInfo.class, //
+				project() //
+						.and("largePopulation")//
+						.applyCondition(ConditionalOperator.newBuilder().when(Criteria.where("population").gte(20000)) //
+								.then(true) //
+								.otherwise(false)) //
+						.and("population").as("population"));
+
+		assertThat(aggregation, is(notNullValue()));
+		assertThat(aggregation.toString(), is(notNullValue()));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(aggregation, DBObject.class);
+		assertThat(result.getMappedResults().size(), is(29467));
+
+		DBObject firstZipInfoStats = result.getMappedResults().get(0);
+		assertThat(firstZipInfoStats.get("largePopulation"), is((Object) false));
+		assertThat(firstZipInfoStats.get("population"), is((Object) 6055));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void aggregationUsingNestedConditionalProjection() {
+
+		TypedAggregation<ZipInfo> aggregation = newAggregation(ZipInfo.class, //
+				project() //
+						.and("size")//
+						.applyCondition(ConditionalOperator.newBuilder().when(Criteria.where("population").gte(20000)) //
+								.then(ConditionalOperator.newBuilder().when(Criteria.where("population").gte(200000)).then("huge")
+										.otherwise("small")) //
+								.otherwise("small")) //
+						.and("population").as("population"));
+
+		assertThat(aggregation, is(notNullValue()));
+		assertThat(aggregation.toString(), is(notNullValue()));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(aggregation, DBObject.class);
+		assertThat(result.getMappedResults().size(), is(29467));
+
+		DBObject firstZipInfoStats = result.getMappedResults().get(0);
+		assertThat(firstZipInfoStats.get("size"), is((Object) "small"));
+		assertThat(firstZipInfoStats.get("population"), is((Object) 6055));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void aggregationUsingIfNullProjection() {
+
+		mongoTemplate.insert(new LineItem("id", "caption", 0));
+		mongoTemplate.insert(new LineItem("idonly", null, 0));
+
+		TypedAggregation<LineItem> aggregation = newAggregation(LineItem.class, //
+				project("id") //
+						.and("caption")//
+						.applyCondition(ifNull(field("caption"), "unknown")),
+				sort(ASC, "id"));
+
+		assertThat(aggregation.toString(), is(notNullValue()));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(aggregation, DBObject.class);
+		assertThat(result.getMappedResults().size(), is(2));
+
+		DBObject id = result.getMappedResults().get(0);
+		assertThat((String) id.get("caption"), is(equalTo("caption")));
+
+		DBObject idonly = result.getMappedResults().get(1);
+		assertThat((String) idonly.get("caption"), is(equalTo("unknown")));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void aggregationUsingIfNullReplaceWithFieldReferenceProjection() {
+
+		mongoTemplate.insert(new LineItem("id", "caption", 0));
+		mongoTemplate.insert(new LineItem("idonly", null, 0));
+
+		TypedAggregation<LineItem> aggregation = newAggregation(LineItem.class, //
+				project("id") //
+						.and("caption")//
+						.applyCondition(ifNull(field("caption"), field("id"))),
+				sort(ASC, "id"));
+
+		assertThat(aggregation.toString(), is(notNullValue()));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(aggregation, DBObject.class);
+		assertThat(result.getMappedResults().size(), is(2));
+
+		DBObject id = result.getMappedResults().get(0);
+		assertThat((String) id.get("caption"), is(equalTo("caption")));
+
+		DBObject idonly = result.getMappedResults().get(1);
+		assertThat((String) idonly.get("caption"), is(equalTo("idonly")));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void shouldAllowGroupingUsingConditionalExpressions() {
+
+		mongoTemplate.dropCollection(CarPerson.class);
+
+		CarPerson person1 = new CarPerson("first1", "last1", new CarDescriptor.Entry("MAKE1", "MODEL1", 2000),
+				new CarDescriptor.Entry("MAKE1", "MODEL2", 2001));
+
+		CarPerson person2 = new CarPerson("first2", "last2", new CarDescriptor.Entry("MAKE3", "MODEL4", 2014));
+		CarPerson person3 = new CarPerson("first3", "last3", new CarDescriptor.Entry("MAKE2", "MODEL5", 2015));
+
+		mongoTemplate.save(person1);
+		mongoTemplate.save(person2);
+		mongoTemplate.save(person3);
+
+		TypedAggregation<CarPerson> agg = Aggregation.newAggregation(CarPerson.class,
+				unwind("descriptors.carDescriptor.entries"), //
+				project() //
+						.and(new ConditionalOperator(Criteria.where("descriptors.carDescriptor.entries.make").is("MAKE1"), "good",
+								"meh"))
+						.as("make") //
+						.and("descriptors.carDescriptor.entries.model").as("model") //
+						.and("descriptors.carDescriptor.entries.year").as("year"), //
+				group("make").avg(new ConditionalOperator(Criteria.where("year").gte(2012), 1, 9000)).as("score"),
+				sort(ASC, "make"));
+
+		AggregationResults<DBObject> result = mongoTemplate.aggregate(agg, DBObject.class);
+
+		assertThat(result.getMappedResults(), hasSize(2));
+
+		DBObject meh = result.getMappedResults().get(0);
+		assertThat((String) meh.get("_id"), is(equalTo("meh")));
+		assertThat(((Number) meh.get("score")).longValue(), is(equalTo(1L)));
+
+		DBObject good = result.getMappedResults().get(1);
+		assertThat((String) good.get("_id"), is(equalTo("good")));
+		assertThat(((Number) good.get("score")).longValue(), is(equalTo(9000L)));
+	}
+
+	/**
 	 * @see http://docs.mongodb.org/manual/tutorial/aggregation-examples/#return-the-five-most-common-likes
 	 */
 	@Test
@@ -486,11 +798,12 @@ public class AggregationTests {
 		assertThat((Double) resultList.get(0).get("netPriceMul2"), is(product.netPrice * 2));
 		assertThat((Double) resultList.get(0).get("netPriceDiv119"), is(product.netPrice / 1.19));
 		assertThat((Integer) resultList.get(0).get("spaceUnitsMod2"), is(product.spaceUnits % 2));
-		assertThat((Integer) resultList.get(0).get("spaceUnitsPlusSpaceUnits"), is(product.spaceUnits + product.spaceUnits));
+		assertThat((Integer) resultList.get(0).get("spaceUnitsPlusSpaceUnits"),
+				is(product.spaceUnits + product.spaceUnits));
 		assertThat((Integer) resultList.get(0).get("spaceUnitsMinusSpaceUnits"),
 				is(product.spaceUnits - product.spaceUnits));
-		assertThat((Integer) resultList.get(0).get("spaceUnitsMultiplySpaceUnits"), is(product.spaceUnits
-				* product.spaceUnits));
+		assertThat((Integer) resultList.get(0).get("spaceUnitsMultiplySpaceUnits"),
+				is(product.spaceUnits * product.spaceUnits));
 		assertThat((Double) resultList.get(0).get("spaceUnitsDivideSpaceUnits"),
 				is((double) (product.spaceUnits / product.spaceUnits)));
 		assertThat((Integer) resultList.get(0).get("spaceUnitsModSpaceUnits"), is(product.spaceUnits % product.spaceUnits));
@@ -579,8 +892,8 @@ public class AggregationTests {
 		DBObject firstItem = resultList.get(0);
 		assertThat((String) firstItem.get("_id"), is(product.id));
 		assertThat((String) firstItem.get("name"), is(product.name));
-		assertThat((Double) firstItem.get("salesPrice"), is((product.netPrice * (1 - product.discountRate) + shippingCosts)
-				* (1 + product.taxRate)));
+		assertThat((Double) firstItem.get("salesPrice"),
+				is((product.netPrice * (1 - product.discountRate) + shippingCosts) * (1 + product.taxRate)));
 	}
 
 	@Test
@@ -602,7 +915,7 @@ public class AggregationTests {
 
 	/**
 	 * @see DATAMONGO-753
-	 * @see http 
+	 * @see http
 	 *      ://stackoverflow.com/questions/18653574/spring-data-mongodb-aggregation-framework-invalid-reference-in-group
 	 *      -operati
 	 */
@@ -632,7 +945,7 @@ public class AggregationTests {
 
 	/**
 	 * @see DATAMONGO-753
-	 * @see http 
+	 * @see http
 	 *      ://stackoverflow.com/questions/18653574/spring-data-mongodb-aggregation-framework-invalid-reference-in-group
 	 *      -operati
 	 */
@@ -667,12 +980,13 @@ public class AggregationTests {
 		data.stringValue = "ABC";
 		mongoTemplate.insert(data);
 
-		TypedAggregation<Data> agg = newAggregation(Data.class, project() //
-				.andExpression("concat(stringValue, 'DE')").as("concat") //
-				.andExpression("strcasecmp(stringValue,'XYZ')").as("strcasecmp") //
-				.andExpression("substr(stringValue,1,1)").as("substr") //
-				.andExpression("toLower(stringValue)").as("toLower") //
-				.andExpression("toUpper(toLower(stringValue))").as("toUpper") //
+		TypedAggregation<Data> agg = newAggregation(Data.class,
+				project() //
+						.andExpression("concat(stringValue, 'DE')").as("concat") //
+						.andExpression("strcasecmp(stringValue,'XYZ')").as("strcasecmp") //
+						.andExpression("substr(stringValue,1,1)").as("substr") //
+						.andExpression("toLower(stringValue)").as("toLower") //
+						.andExpression("toUpper(toLower(stringValue))").as("toUpper") //
 		);
 
 		AggregationResults<DBObject> results = mongoTemplate.aggregate(agg, DBObject.class);
@@ -698,17 +1012,18 @@ public class AggregationTests {
 		data.dateValue = new SimpleDateFormat("dd.MM.yyyy HH:mm:ss.SSSZ").parse("29.08.1983 12:34:56.789+0000");
 		mongoTemplate.insert(data);
 
-		TypedAggregation<Data> agg = newAggregation(Data.class, project() //
-				.andExpression("dayOfYear(dateValue)").as("dayOfYear") //
-				.andExpression("dayOfMonth(dateValue)").as("dayOfMonth") //
-				.andExpression("dayOfWeek(dateValue)").as("dayOfWeek") //
-				.andExpression("year(dateValue)").as("year") //
-				.andExpression("month(dateValue)").as("month") //
-				.andExpression("week(dateValue)").as("week") //
-				.andExpression("hour(dateValue)").as("hour") //
-				.andExpression("minute(dateValue)").as("minute") //
-				.andExpression("second(dateValue)").as("second") //
-				.andExpression("millisecond(dateValue)").as("millisecond") //
+		TypedAggregation<Data> agg = newAggregation(Data.class,
+				project() //
+						.andExpression("dayOfYear(dateValue)").as("dayOfYear") //
+						.andExpression("dayOfMonth(dateValue)").as("dayOfMonth") //
+						.andExpression("dayOfWeek(dateValue)").as("dayOfWeek") //
+						.andExpression("year(dateValue)").as("year") //
+						.andExpression("month(dateValue)").as("month") //
+						.andExpression("week(dateValue)").as("week") //
+						.andExpression("hour(dateValue)").as("hour") //
+						.andExpression("minute(dateValue)").as("minute") //
+						.andExpression("second(dateValue)").as("second") //
+						.andExpression("millisecond(dateValue)").as("millisecond") //
 		);
 
 		AggregationResults<DBObject> results = mongoTemplate.aggregate(agg, DBObject.class);
@@ -820,7 +1135,7 @@ public class AggregationTests {
 						.and("orderId").previousOperation() //
 						.andExpression("netAmount * [0]", taxRate).as("taxAmount") //
 						.andExpression("netAmount * (1 + [0])", taxRate).as("totalAmount") //
-				), Invoice.class);
+		), Invoice.class);
 
 		Invoice invoice = results.getUniqueMappedResult();
 
@@ -1120,6 +1435,71 @@ public class AggregationTests {
 		assertThat(firstItem, isBsonObject().containing("linkedPerson.[0].firstname", "u1"));
 	}
 
+	/**
+	 * @see DATAMONGO-1418
+	 */
+	@Test
+	public void shouldCreateOutputCollection() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(TWO_DOT_SIX));
+
+		mongoTemplate.save(new Person("Anna", "Ivanova", 21, Person.Sex.FEMALE));
+		mongoTemplate.save(new Person("Pavel", "Sidorov", 36, Person.Sex.MALE));
+		mongoTemplate.save(new Person("Anastasia", "Volochkova", 29, Person.Sex.FEMALE));
+		mongoTemplate.save(new Person("Igor", "Stepanov", 31, Person.Sex.MALE));
+		mongoTemplate.save(new Person("Leoniv", "Yakubov", 55, Person.Sex.MALE));
+
+		String tempOutCollection = "personQueryTemp";
+		TypedAggregation<Person> agg = newAggregation(Person.class, //
+				group("sex").count().as("count"), //
+				sort(DESC, "count"), //
+				out(tempOutCollection));
+
+		AggregationResults<DBObject> results = mongoTemplate.aggregate(agg, DBObject.class);
+		assertThat(results.getMappedResults(), is(empty()));
+
+		List<DBObject> list = mongoTemplate.findAll(DBObject.class, tempOutCollection);
+
+		assertThat(list, hasSize(2));
+		assertThat(list.get(0), isBsonObject().containing("_id", "MALE").containing("count", 3));
+		assertThat(list.get(1), isBsonObject().containing("_id", "FEMALE").containing("count", 2));
+
+		mongoTemplate.dropCollection(tempOutCollection);
+	}
+
+	/**
+	 * @see DATAMONGO-1418
+	 */
+	@Test(expected = IllegalArgumentException.class)
+	public void outShouldOutBeTheLastOperation() {
+
+		newAggregation(match(new Criteria()), //
+				group("field1").count().as("totalCount"), //
+				out("collection1"), //
+				skip(100));
+	}
+
+	/**
+	 * @see DATAMONGO-1457
+	 */
+	@Test
+	public void sliceShouldBeAppliedCorrectly() {
+
+		assumeTrue(mongoVersion.isGreaterThanOrEqualTo(THREE_DOT_TWO));
+
+		createUserWithLikesDocuments();
+
+		TypedAggregation<UserWithLikes> agg = newAggregation(UserWithLikes.class, match(new Criteria()),
+				project().and("likes").slice(2));
+
+		AggregationResults<UserWithLikes> result = mongoTemplate.aggregate(agg, UserWithLikes.class);
+
+		assertThat(result.getMappedResults(), hasSize(9));
+		for (UserWithLikes user : result) {
+			assertThat(user.likes.size() <= 2, is(true));
+		}
+	}
+
 	private void createUsersWithReferencedPersons() {
 
 		mongoTemplate.dropCollection(User.class);
@@ -1329,6 +1709,35 @@ public class AggregationTests {
 
 		public ObjectWithDate(Date dateValue) {
 			this.dateValue = dateValue;
+		}
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Document(collection = "inventory")
+	static class InventoryItem {
+
+		int id;
+		String item;
+		String description;
+		int qty;
+
+		public InventoryItem() {}
+
+		public InventoryItem(int id, String item, int qty) {
+
+			this.id = id;
+			this.item = item;
+			this.qty = qty;
+		}
+
+		public InventoryItem(int id, String item, String description, int qty) {
+
+			this.id = id;
+			this.item = item;
+			this.description = description;
+			this.qty = qty;
 		}
 	}
 }

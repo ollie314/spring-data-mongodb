@@ -50,5 +50,4 @@ public class ApplicationContextEventTestsAppConfig extends AbstractMongoConfigur
 	public SimpleMappingEventListener simpleMappingEventListener() {
 		return new SimpleMappingEventListener();
 	}
-
 }

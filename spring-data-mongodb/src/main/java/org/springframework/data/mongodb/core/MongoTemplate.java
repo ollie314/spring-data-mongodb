@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 the original author or authors.
+ * Copyright 2010-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -138,6 +138,7 @@ import com.mongodb.util.JSONParseException;
  * @author Chuong Ngo
  * @author Christoph Strobl
  * @author Doménique Tilleuil
+ * @author Niko Schmuck
  */
 @SuppressWarnings("deprecation")
 public class MongoTemplate implements MongoOperations, ApplicationContextAware {
@@ -326,7 +327,21 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware {
 	@Override
 	public <T> CloseableIterator<T> stream(final Query query, final Class<T> entityType) {
 
-		return execute(entityType, new CollectionCallback<CloseableIterator<T>>() {
+		return stream(query, entityType, determineCollectionName(entityType));
+	}
+
+	/* 
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.MongoOperations#stream(org.springframework.data.mongodb.core.query.Query, java.lang.Class, java.lang.String)
+	 */
+	@Override
+	public <T> CloseableIterator<T> stream(final Query query, final Class<T> entityType, final String collectionName) {
+
+		Assert.notNull(query, "Query must not be null!");
+		Assert.notNull(entityType, "Entity type must not be null!");
+		Assert.hasText(collectionName, "Collection name must not be null or empty!");
+
+		return execute(collectionName, new CollectionCallback<CloseableIterator<T>>() {
 
 			@Override
 			public CloseableIterator<T> doInCollection(DBCollection collection) throws MongoException, DataAccessException {
@@ -339,8 +354,7 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware {
 				DBCursor cursor = collection.find(mappedQuery, mappedFields);
 				QueryCursorPreparer cursorPreparer = new QueryCursorPreparer(query, entityType);
 
-				ReadDbObjectCallback<T> readCallback = new ReadDbObjectCallback<T>(mongoConverter, entityType,
-						collection.getName());
+				ReadDbObjectCallback<T> readCallback = new ReadDbObjectCallback<T>(mongoConverter, entityType, collectionName);
 
 				return new CloseableIterableCursorAdapter<T>(cursorPreparer.prepare(cursor), exceptionTranslator, readCallback);
 			}
@@ -1322,7 +1336,7 @@ public class MongoTemplate implements MongoOperations, ApplicationContextAware {
 
 				if (LOGGER.isDebugEnabled()) {
 					LOGGER.debug("Remove using query: {} in collection: {}.",
-							new Object[] { serializeToJsonSafely(dboq), collection.getName() });
+							new Object[] { serializeToJsonSafely(dboq), collectionName });
 				}
 
 				WriteResult wr = writeConcernToUse == null ? collection.remove(dboq)

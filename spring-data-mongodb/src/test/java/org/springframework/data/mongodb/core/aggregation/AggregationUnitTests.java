@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,15 +19,19 @@ import static org.hamcrest.CoreMatchers.*;
 import static org.junit.Assert.*;
 import static org.springframework.data.mongodb.core.DBObjectTestUtils.*;
 import static org.springframework.data.mongodb.core.aggregation.Aggregation.*;
+import static org.springframework.data.mongodb.core.aggregation.Fields.*;
 import static org.springframework.data.mongodb.core.query.Criteria.*;
+import static org.springframework.data.mongodb.test.util.IsBsonObject.*;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.ExpectedException;
 import org.springframework.data.domain.Sort.Direction;
+import org.springframework.data.mongodb.core.query.Criteria;
 
 import com.mongodb.BasicDBObject;
 import com.mongodb.BasicDBObjectBuilder;
@@ -39,6 +43,7 @@ import com.mongodb.DBObject;
  * @author Oliver Gierke
  * @author Thomas Darimont
  * @author Christoph Strobl
+ * @author Mark Paluch
  */
 public class AggregationUnitTests {
 
@@ -92,6 +97,64 @@ public class AggregationUnitTests {
 				unwind("a"), //
 				project("a", "b") // b should still be available
 		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+	}
+
+	/**
+	 * @see DATAMONGO-1391
+	 */
+	@Test
+	public void unwindOperationWithIndexShouldPreserveFields() {
+
+		newAggregation( //
+				project("a", "b"), //
+				unwind("a", "x"), //
+				project("a", "b") // b should still be available
+		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+	}
+
+	/**
+	 * @see DATAMONGO-1391
+	 */
+	@Test
+	public void unwindOperationWithIndexShouldAddIndexField() {
+
+		newAggregation( //
+				project("a", "b"), //
+				unwind("a", "x"), //
+				project("a", "x") // b should still be available
+		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+	}
+
+	/**
+	 * @see DATAMONGO-1391
+	 */
+	@Test
+	public void fullUnwindOperationShouldBuildCorrectClause() {
+
+		DBObject agg = newAggregation( //
+				unwind("a", "x", true)).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		@SuppressWarnings("unchecked")
+		DBObject unwind = ((List<DBObject>) agg.get("pipeline")).get(0);
+		assertThat((DBObject) unwind.get("$unwind"),
+				isBsonObject(). //
+						containing("includeArrayIndex", "x").//
+						containing("preserveNullAndEmptyArrays", true));
+	}
+
+	/**
+	 * @see DATAMONGO-1391
+	 */
+	@Test
+	public void unwindOperationWithPreserveNullShouldBuildCorrectClause() {
+
+		DBObject agg = newAggregation( //
+				unwind("a", true)).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		@SuppressWarnings("unchecked")
+		DBObject unwind = ((List<DBObject>) agg.get("pipeline")).get(0);
+		assertThat(unwind,
+				isBsonObject().notContaining("includeArrayIndex").containing("preserveNullAndEmptyArrays", true));
 	}
 
 	/**
@@ -248,15 +311,16 @@ public class AggregationUnitTests {
 		DBObject agg = newAggregation( //
 				project().and("a").as("aa") //
 		) //
-		.withOptions(aggregationOptions) //
+				.withOptions(aggregationOptions) //
 				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
 
-		assertThat(agg.toString(), is("{ \"aggregate\" : \"foo\" , " //
-				+ "\"pipeline\" : [ { \"$project\" : { \"aa\" : \"$a\"}}] , " //
-				+ "\"allowDiskUse\" : true , " //
-				+ "\"explain\" : true , " //
-				+ "\"cursor\" : { \"foo\" : 1}}" //
-		));
+		assertThat(agg.toString(),
+				is("{ \"aggregate\" : \"foo\" , " //
+						+ "\"pipeline\" : [ { \"$project\" : { \"aa\" : \"$a\"}}] , " //
+						+ "\"allowDiskUse\" : true , " //
+						+ "\"explain\" : true , " //
+						+ "\"cursor\" : { \"foo\" : 1}}" //
+				));
 	}
 
 	/**
@@ -274,8 +338,8 @@ public class AggregationUnitTests {
 		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
 
 		DBObject projection0 = extractPipelineElement(agg, 0, "$project");
-		assertThat(projection0, is((DBObject) new BasicDBObject("someKey", 1).append("a1", "$a")
-				.append("a2", "$$CURRENT.a")));
+		assertThat(projection0,
+				is((DBObject) new BasicDBObject("someKey", 1).append("a1", "$a").append("a2", "$$CURRENT.a")));
 
 		DBObject sort = extractPipelineElement(agg, 1, "$sort");
 		assertThat(sort, is((DBObject) new BasicDBObject("a", -1)));
@@ -296,7 +360,7 @@ public class AggregationUnitTests {
 						.and("tags").minus(10).as("tags_count")//
 				, group("date")//
 						.sum("tags_count").as("count")//
-				).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
 
 		DBObject group = extractPipelineElement(agg, 1, "$group");
 		assertThat(getAsDBObject(group, "count"), is(new BasicDBObjectBuilder().add("$sum", "$tags_count").get()));
@@ -313,10 +377,177 @@ public class AggregationUnitTests {
 						.andExpression("tags-10")//
 				, group("date")//
 						.sum("tags_count").as("count")//
-				).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
 
 		DBObject group = extractPipelineElement(agg, 1, "$group");
 		assertThat(getAsDBObject(group, "count"), is(new BasicDBObjectBuilder().add("$sum", "$tags_count").get()));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void conditionExpressionBasedFieldsShouldBeReferencableInFollowingOperations() {
+
+		DBObject agg = newAggregation( //
+				project("a"), //
+				group("a").first(conditional(Criteria.where("a").gte(42), "answer", "no-answer")).as("foosum") //
+		).toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		@SuppressWarnings("unchecked")
+		DBObject secondProjection = ((List<DBObject>) agg.get("pipeline")).get(1);
+		DBObject fields = getAsDBObject(secondProjection, "$group");
+		assertThat(getAsDBObject(fields, "foosum"), isBsonObject().containing("$first"));
+		assertThat(getAsDBObject(fields, "foosum"), isBsonObject().containing("$first.$cond.then", "answer"));
+		assertThat(getAsDBObject(fields, "foosum"), isBsonObject().containing("$first.$cond.else", "no-answer"));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void shouldRenderProjectionConditionalExpressionCorrectly() {
+
+		DBObject agg = Aggregation.newAggregation(//
+				project().and(ConditionalOperator.newBuilder() //
+						.when("isYellow") //
+						.then("bright") //
+						.otherwise("dark")).as("color"))
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 0, "$project");
+		DBObject expectedCondition = new BasicDBObject() //
+				.append("if", "$isYellow") //
+				.append("then", "bright") //
+				.append("else", "dark");
+
+		assertThat(getAsDBObject(project, "color"), isBsonObject().containing("$cond", expectedCondition));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void shouldRenderProjectionConditionalCorrectly() {
+
+		DBObject agg = Aggregation.newAggregation(//
+				project().and("color")
+						.applyCondition(ConditionalOperator.newBuilder() //
+								.when("isYellow") //
+								.then("bright") //
+								.otherwise("dark")))
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 0, "$project");
+		DBObject expectedCondition = new BasicDBObject() //
+				.append("if", "$isYellow") //
+				.append("then", "bright") //
+				.append("else", "dark");
+
+		assertThat(getAsDBObject(project, "color"), isBsonObject().containing("$cond", expectedCondition));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void shouldRenderProjectionConditionalWithCriteriaCorrectly() {
+
+		DBObject agg = Aggregation
+				.newAggregation(project()//
+						.and("color")//
+						.applyCondition(conditional(Criteria.where("key").gt(5), "bright", "dark"))) //
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 0, "$project");
+		DBObject expectedCondition = new BasicDBObject() //
+				.append("if", new BasicDBObject("$gt", Arrays.<Object> asList("$key", 5))) //
+				.append("then", "bright") //
+				.append("else", "dark");
+
+		assertThat(getAsDBObject(project, "color"), isBsonObject().containing("$cond", expectedCondition));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void referencingProjectionAliasesShouldRenderProjectionConditionalWithFieldReferenceCorrectly() {
+
+		DBObject agg = Aggregation
+				.newAggregation(//
+						project().and("color").as("chroma"),
+						project().and("luminosity") //
+								.applyCondition(conditional(field("chroma"), "bright", "dark"))) //
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 1, "$project");
+		DBObject expectedCondition = new BasicDBObject() //
+				.append("if", "$chroma") //
+				.append("then", "bright") //
+				.append("else", "dark");
+
+		assertThat(getAsDBObject(project, "luminosity"), isBsonObject().containing("$cond", expectedCondition));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void referencingProjectionAliasesShouldRenderProjectionConditionalWithCriteriaReferenceCorrectly() {
+
+		DBObject agg = Aggregation
+				.newAggregation(//
+						project().and("color").as("chroma"),
+						project().and("luminosity") //
+								.applyCondition(conditional(Criteria.where("chroma").is(100), "bright", "dark"))) //
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 1, "$project");
+		DBObject expectedCondition = new BasicDBObject() //
+				.append("if", new BasicDBObject("$eq", Arrays.<Object> asList("$chroma", 100))) //
+				.append("then", "bright") //
+				.append("else", "dark");
+
+		assertThat(getAsDBObject(project, "luminosity"), isBsonObject().containing("$cond", expectedCondition));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void shouldRenderProjectionIfNullWithFieldReferenceCorrectly() {
+
+		DBObject agg = Aggregation
+				.newAggregation(//
+						project().and("color"), //
+						project().and("luminosity") //
+								.applyCondition(ifNull(field("chroma"), "unknown"))) //
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 1, "$project");
+
+		assertThat(getAsDBObject(project, "luminosity"),
+				isBsonObject().containing("$ifNull", Arrays.<Object> asList("$chroma", "unknown")));
+	}
+
+	/**
+	 * @see DATAMONGO-861
+	 */
+	@Test
+	public void shouldRenderProjectionIfNullWithFallbackFieldReferenceCorrectly() {
+
+		DBObject agg = Aggregation
+				.newAggregation(//
+						project("fallback").and("color").as("chroma"),
+						project().and("luminosity") //
+								.applyCondition(ifNull(field("chroma"), field("fallback")))) //
+				.toDbObject("foo", Aggregation.DEFAULT_CONTEXT);
+
+		DBObject project = extractPipelineElement(agg, 1, "$project");
+
+		assertThat(getAsDBObject(project, "luminosity"),
+				isBsonObject().containing("$ifNull", Arrays.asList("$chroma", "$fallback")));
 	}
 
 	private DBObject extractPipelineElement(DBObject agg, int index, String operation) {

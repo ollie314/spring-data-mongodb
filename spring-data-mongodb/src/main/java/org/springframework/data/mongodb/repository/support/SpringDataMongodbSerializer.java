@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 the original author or authors.
+ * Copyright 2011-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,9 +26,13 @@ import org.springframework.data.mongodb.core.convert.QueryMapper;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
 import org.springframework.util.Assert;
+import org.springframework.util.ClassUtils;
 
 import com.mongodb.DBObject;
 import com.mongodb.DBRef;
+import com.querydsl.core.types.Constant;
+import com.querydsl.core.types.Expression;
+import com.querydsl.core.types.Operation;
 import com.querydsl.core.types.Path;
 import com.querydsl.core.types.PathMetadata;
 import com.querydsl.core.types.PathType;
@@ -74,6 +78,20 @@ class SpringDataMongodbSerializer extends MongodbSerializer {
 
 	/*
 	 * (non-Javadoc)
+	 * @see com.querydsl.mongodb.MongodbSerializer#visit(com.querydsl.core.types.Constant, java.lang.Void)
+	 */
+	@Override
+	public Object visit(Constant<?> expr, Void context) {
+
+		if (!ClassUtils.isAssignable(Enum.class, expr.getType())) {
+			return super.visit(expr, context);
+		}
+
+		return converter.convertToMongoType(expr.getConstant());
+	}
+
+	/*
+	 * (non-Javadoc)
 	 * @see com.querydsl.mongodb.MongodbSerializer#getKeyForPath(com.querydsl.core.types.Path, com.querydsl.core.types.PathMetadata)
 	 */
 	@Override
@@ -100,7 +118,6 @@ class SpringDataMongodbSerializer extends MongodbSerializer {
 		if (ID_KEY.equals(key)) {
 			return mapper.getMappedObject(super.asDBObject(key, value), null);
 		}
-
 		return super.asDBObject(key, value instanceof Pattern ? value : converter.convertToMongoType(value));
 	}
 
@@ -111,7 +128,7 @@ class SpringDataMongodbSerializer extends MongodbSerializer {
 	@Override
 	protected boolean isReference(Path<?> path) {
 
-		MongoPersistentProperty property = getPropertyFor(path);
+		MongoPersistentProperty property = getPropertyForPotentialDbRef(path);
 		return property == null ? false : property.isAssociation();
 	}
 
@@ -121,7 +138,52 @@ class SpringDataMongodbSerializer extends MongodbSerializer {
 	 */
 	@Override
 	protected DBRef asReference(Object constant) {
-		return converter.toDBRef(constant, null);
+		return asReference(constant, null);
+	}
+
+	protected DBRef asReference(Object constant, Path<?> path) {
+		return converter.toDBRef(constant, getPropertyForPotentialDbRef(path));
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see com.querydsl.mongodb.MongodbSerializer#asDBKey(com.querydsl.core.types.Operation, int)
+	 */
+	@Override
+	protected String asDBKey(Operation<?> expr, int index) {
+
+		Expression<?> arg = expr.getArg(index);
+		String key = super.asDBKey(expr, index);
+
+		if (!(arg instanceof Path)) {
+			return key;
+		}
+
+		Path<?> path = (Path<?>) arg;
+
+		if (!isReference(path)) {
+			return key;
+		}
+
+		MongoPersistentProperty property = getPropertyFor(path);
+
+		return property.isIdProperty() ? key.replaceAll("." + ID_KEY + "$", "") : key;
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see com.querydsl.mongodb.MongodbSerializer#convert(com.querydsl.core.types.Path, com.querydsl.core.types.Constant)
+	 */
+	protected Object convert(Path<?> path, Constant<?> constant) {
+
+		if (!isReference(path)) {
+			return super.convert(path, constant);
+		}
+
+		MongoPersistentProperty property = getPropertyFor(path);
+
+		return property.isIdProperty() ? asReference(constant.getConstant(), path.getMetadata().getParent())
+				: asReference(constant.getConstant(), path);
 	}
 
 	private MongoPersistentProperty getPropertyFor(Path<?> path) {
@@ -134,5 +196,29 @@ class SpringDataMongodbSerializer extends MongodbSerializer {
 
 		MongoPersistentEntity<?> entity = mappingContext.getPersistentEntity(parent.getType());
 		return entity != null ? entity.getPersistentProperty(path.getMetadata().getName()) : null;
+	}
+
+	/**
+	 * Checks the given {@literal path} for referencing the {@literal id} property of a {@link DBRef} referenced object.
+	 * If so it returns the referenced {@link MongoPersistentProperty} of the {@link DBRef} instead of the {@literal id}
+	 * property.
+	 *
+	 * @param path
+	 * @return
+	 */
+	private MongoPersistentProperty getPropertyForPotentialDbRef(Path<?> path) {
+
+		if (path == null) {
+			return null;
+		}
+
+		MongoPersistentProperty property = getPropertyFor(path);
+		PathMetadata metadata = path.getMetadata();
+
+		if (property != null && property.isIdProperty() && metadata != null && metadata.getParent() != null) {
+			return getPropertyFor(metadata.getParent());
+		}
+
+		return property;
 	}
 }

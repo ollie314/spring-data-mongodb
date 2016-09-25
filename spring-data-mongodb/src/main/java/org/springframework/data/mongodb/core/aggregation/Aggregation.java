@@ -44,6 +44,8 @@ import com.mongodb.DBObject;
  * @author Oliver Gierke
  * @author Mark Paluch
  * @author Alessio Fachechi
+ * @author Christoph Strobl
+ * @author Nikolay Bogdanov
  * @since 1.3
  */
 public class Aggregation {
@@ -159,8 +161,19 @@ public class Aggregation {
 		Assert.isTrue(!aggregationOperations.isEmpty(), "At least one AggregationOperation has to be provided");
 		Assert.notNull(options, "AggregationOptions must not be null!");
 
+		// check $out is the last operation if it exists
+		for (AggregationOperation aggregationOperation : aggregationOperations) {
+			if (aggregationOperation instanceof OutOperation && !isLast(aggregationOperation, aggregationOperations)) {
+				throw new IllegalArgumentException("The $out operator must be the last stage in the pipeline.");
+			}
+		}
+
 		this.operations = aggregationOperations;
 		this.options = options;
+	}
+
+	private boolean isLast(AggregationOperation aggregationOperation, List<AggregationOperation> aggregationOperations) {
+		return aggregationOperations.indexOf(aggregationOperation) == aggregationOperations.size() - 1;
 	}
 
 	/**
@@ -195,11 +208,55 @@ public class Aggregation {
 	/**
 	 * Factory method to create a new {@link UnwindOperation} for the field with the given name.
 	 *
-	 * @param fieldName must not be {@literal null} or empty.
+	 * @param field must not be {@literal null} or empty.
 	 * @return
 	 */
 	public static UnwindOperation unwind(String field) {
 		return new UnwindOperation(field(field));
+	}
+
+	/**
+	 * Factory method to create a new {@link UnwindOperation} for the field with the given name and
+	 * {@code preserveNullAndEmptyArrays}. Note that extended unwind is supported in MongoDB version 3.2+.
+	 *
+	 * @param field must not be {@literal null} or empty.
+	 * @param preserveNullAndEmptyArrays {@literal true} to output the document if path is {@literal null}, missing or
+	 *          array is empty.
+	 * @return new {@link UnwindOperation}
+	 * @since 1.10
+	 */
+	public static UnwindOperation unwind(String field, boolean preserveNullAndEmptyArrays) {
+		return new UnwindOperation(field(field), preserveNullAndEmptyArrays);
+	}
+
+	/**
+	 * Factory method to create a new {@link UnwindOperation} for the field with the given name including the name of a
+	 * new field to hold the array index of the element as {@code arrayIndex}. Note that extended unwind is supported in
+	 * MongoDB version 3.2+.
+	 *
+	 * @param field must not be {@literal null} or empty.
+	 * @param arrayIndex must not be {@literal null} or empty.
+	 * @return new {@link UnwindOperation}
+	 * @since 1.10
+	 */
+	public static UnwindOperation unwind(String field, String arrayIndex) {
+		return new UnwindOperation(field(field), field(arrayIndex), false);
+	}
+
+	/**
+	 * Factory method to create a new {@link UnwindOperation} for the field with the given nameincluding the name of a new
+	 * field to hold the array index of the element as {@code arrayIndex} using {@code preserveNullAndEmptyArrays}. Note
+	 * that extended unwind is supported in MongoDB version 3.2+.
+	 *
+	 * @param field must not be {@literal null} or empty.
+	 * @param arrayIndex must not be {@literal null} or empty.
+	 * @param preserveNullAndEmptyArrays {@literal true} to output the document if path is {@literal null}, missing or
+	 *          array is empty.
+	 * @return new {@link UnwindOperation}
+	 * @since 1.10
+	 */
+	public static UnwindOperation unwind(String field, String arrayIndex, boolean preserveNullAndEmptyArrays) {
+		return new UnwindOperation(field(field), field(arrayIndex), preserveNullAndEmptyArrays);
 	}
 
 	/**
@@ -274,6 +331,20 @@ public class Aggregation {
 	}
 
 	/**
+	 * Creates a new {@link OutOperation} using the given collection name. This operation must be the last operation in
+	 * the pipeline.
+	 *
+	 * @param outCollectionName collection name to export aggregation results. The {@link OutOperation} creates a new
+	 *          collection in the current database if one does not already exist. The collection is not visible until the
+	 *          aggregation completes. If the aggregation fails, MongoDB does not create the collection. Must not be
+	 *          {@literal null}.
+	 * @return
+	 */
+	public static OutOperation out(String outCollectionName) {
+		return new OutOperation(outCollectionName);
+	}
+
+	/**
 	 * Creates a new {@link LookupOperation}.
 	 *
 	 * @param from must not be {@literal null}.
@@ -299,6 +370,68 @@ public class Aggregation {
 	 */
 	public static LookupOperation lookup(Field from, Field localField, Field foreignField, Field as) {
 		return new LookupOperation(from, localField, foreignField, as);
+	}
+
+	/**
+	 * Creates a new {@link IfNullOperator} for the given {@code field} and {@code replacement} value.
+	 *
+	 * @param field must not be {@literal null}.
+	 * @param replacement must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.10
+	 */
+	public static IfNullOperator ifNull(String field, Object replacement) {
+		return IfNullOperator.newBuilder().ifNull(field).thenReplaceWith(replacement);
+	}
+
+	/**
+	 * Creates a new {@link IfNullOperator} for the given {@link Field} and {@link Field} to obtain a value from.
+	 *
+	 * @param field must not be {@literal null}.
+	 * @param replacement must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.10
+	 */
+	public static IfNullOperator ifNull(Field field, Field replacement) {
+		return IfNullOperator.newBuilder().ifNull(field).thenReplaceWith(replacement);
+	}
+
+	/**
+	 * Creates a new {@link IfNullOperator} for the given {@link Field} and {@code replacement} value.
+	 *
+	 * @param field must not be {@literal null}.
+	 * @param replacement must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.10
+	 */
+	public static IfNullOperator ifNull(Field field, Object replacement) {
+		return IfNullOperator.newBuilder().ifNull(field).thenReplaceWith(replacement);
+	}
+
+	/**
+	 * Creates a new {@link ConditionalOperator} for the given {@link Field} that holds a {@literal boolean} value.
+	 *
+	 * @param booleanField must not be {@literal null}.
+	 * @param then must not be {@literal null}.
+	 * @param otherwise must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.10
+	 */
+	public static ConditionalOperator conditional(Field booleanField, Object then, Object otherwise) {
+		return ConditionalOperator.newBuilder().when(booleanField).then(then).otherwise(otherwise);
+	}
+
+	/**
+	 * Creates a new {@link ConditionalOperator} for the given {@link Criteria}.
+	 *
+	 * @param criteria must not be {@literal null}.
+	 * @param then must not be {@literal null}.
+	 * @param otherwise must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.10
+	 */
+	public static ConditionalOperator conditional(Criteria criteria, Object then, Object otherwise) {
+		return ConditionalOperator.newBuilder().when(criteria).then(then).otherwise(otherwise);
 	}
 
 	/**

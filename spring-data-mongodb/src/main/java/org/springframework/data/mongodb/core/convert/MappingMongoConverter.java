@@ -1,5 +1,5 @@
 /*
- * Copyright 2011-2015 by the original author(s).
+ * Copyright 2011-2016 by the original author(s).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,11 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -53,6 +55,9 @@ import org.springframework.data.mapping.model.SpELExpressionParameterValueProvid
 import org.springframework.data.mongodb.MongoDbFactory;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentEntity;
 import org.springframework.data.mongodb.core.mapping.MongoPersistentProperty;
+import org.springframework.data.mongodb.core.mapping.event.AfterConvertEvent;
+import org.springframework.data.mongodb.core.mapping.event.AfterLoadEvent;
+import org.springframework.data.mongodb.core.mapping.event.MongoMappingEvent;
 import org.springframework.data.util.ClassTypeInformation;
 import org.springframework.data.util.TypeInformation;
 import org.springframework.expression.spel.standard.SpelExpressionParser;
@@ -74,6 +79,7 @@ import com.mongodb.DBRef;
  * @author Patrik Wasik
  * @author Thomas Darimont
  * @author Christoph Strobl
+ * @author Jordi Llach
  */
 public class MappingMongoConverter extends AbstractMongoConverter implements ApplicationContextAware, ValueResolver {
 
@@ -258,14 +264,14 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 
 		// make sure id property is set before all other properties
 		Object idValue = null;
+		final DBObjectAccessor dbObjectAccessor = new DBObjectAccessor(dbo);
 
-		if (idProperty != null) {
+		if (idProperty != null && dbObjectAccessor.hasValue(idProperty)) {
 			idValue = getValueInternal(idProperty, dbo, evaluator, path);
 			accessor.setProperty(idProperty, idValue);
 		}
 
-		final ObjectPath currentPath = path.push(result, entity,
-				idValue != null ? dbo.get(idProperty.getFieldName()) : null);
+		final ObjectPath currentPath = path.push(result, entity, idValue != null ? dbObjectAccessor.get(idProperty) : null);
 
 		// Set properties not already set in the constructor
 		entity.doWithProperties(new PropertyHandler<MongoPersistentProperty>() {
@@ -276,7 +282,7 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 					return;
 				}
 
-				if (!dbo.containsField(prop.getFieldName()) || entity.isConstructorArgument(prop)) {
+				if (entity.isConstructorArgument(prop) || !dbObjectAccessor.hasValue(prop)) {
 					return;
 				}
 
@@ -289,7 +295,7 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 			public void doWithAssociation(Association<MongoPersistentProperty> association) {
 
 				final MongoPersistentProperty property = association.getInverse();
-				Object value = dbo.get(property.getFieldName());
+				Object value = dbObjectAccessor.get(property);
 
 				if (value == null || entity.isConstructorArgument(property)) {
 					return;
@@ -878,6 +884,7 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 	 * @param path must not be {@literal null}.
 	 * @return the converted {@link Collection} or array, will never be {@literal null}.
 	 */
+	@SuppressWarnings({ "rawtypes", "unchecked" })
 	private Object readCollectionOrArray(TypeInformation<?> targetType, BasicDBList sourceValue, ObjectPath path) {
 
 		Assert.notNull(targetType, "Target type must not be null!");
@@ -896,13 +903,16 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 		Collection<Object> items = targetType.getType().isArray() ? new ArrayList<Object>()
 				: CollectionFactory.createCollection(collectionType, rawComponentType, sourceValue.size());
 
-		for (int i = 0; i < sourceValue.size(); i++) {
+		if (!DBRef.class.equals(rawComponentType) && isCollectionOfDbRefWhereBulkFetchIsPossible(sourceValue)) {
+			return bulkReadAndConvertDBRefs((List<DBRef>) (List) (sourceValue), componentType, path, rawComponentType);
+		}
 
-			Object dbObjItem = sourceValue.get(i);
+		for (Object dbObjItem : sourceValue) {
 
 			if (dbObjItem instanceof DBRef) {
-				items.add(
-						DBRef.class.equals(rawComponentType) ? dbObjItem : read(componentType, readRef((DBRef) dbObjItem), path));
+
+				items.add(DBRef.class.equals(rawComponentType) ? dbObjItem
+						: readAndConvertDBRef((DBRef) dbObjItem, componentType, path, rawComponentType));
 			} else if (dbObjItem instanceof DBObject) {
 				items.add(read(componentType, (DBObject) dbObjItem, path));
 			} else {
@@ -938,6 +948,11 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 		Map<Object, Object> map = CollectionFactory.createMap(mapType, rawKeyType, dbObject.keySet().size());
 		Map<String, Object> sourceMap = dbObject.toMap();
 
+		if (!DBRef.class.equals(rawValueType) && isCollectionOfDbRefWhereBulkFetchIsPossible(sourceMap.values())) {
+			bulkReadAndConvertDBRefMapIntoTarget(valueType, rawValueType, sourceMap, map);
+			return map;
+		}
+
 		for (Entry<String, Object> entry : sourceMap.entrySet()) {
 			if (typeMapper.isTypeKey(entry.getKey())) {
 				continue;
@@ -954,7 +969,8 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 			if (value instanceof DBObject) {
 				map.put(key, read(valueType, (DBObject) value, path));
 			} else if (value instanceof DBRef) {
-				map.put(key, DBRef.class.equals(rawValueType) ? value : read(valueType, readRef((DBRef) value)));
+				map.put(key, DBRef.class.equals(rawValueType) ? value
+						: readAndConvertDBRef((DBRef) value, valueType, ObjectPath.ROOT, rawValueType));
 			} else {
 				Class<?> valueClass = valueType == null ? null : valueType.getType();
 				map.put(key, getPotentiallyConvertedSimpleRead(value, valueClass));
@@ -992,20 +1008,32 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 		}
 
 		if (obj instanceof DBObject) {
+
 			DBObject newValueDbo = new BasicDBObject();
+
 			for (String vk : ((DBObject) obj).keySet()) {
+
 				Object o = ((DBObject) obj).get(vk);
 				newValueDbo.put(vk, convertToMongoType(o, typeHint));
 			}
+
 			return newValueDbo;
 		}
 
 		if (obj instanceof Map) {
-			DBObject result = new BasicDBObject();
-			for (Map.Entry<Object, Object> entry : ((Map<Object, Object>) obj).entrySet()) {
-				result.put(entry.getKey().toString(), convertToMongoType(entry.getValue(), typeHint));
+
+			Map<Object, Object> converted = new LinkedHashMap<Object, Object>();
+
+			for (Entry<Object, Object> entry : ((Map<Object, Object>) obj).entrySet()) {
+
+				TypeInformation<? extends Object> valueTypeHint = typeHint != null && typeHint.getMapValueType() != null
+						? typeHint.getMapValueType() : typeHint;
+
+				converted.put(getPotentiallyConvertedSimpleWrite(entry.getKey()).toString(),
+						convertToMongoType(entry.getValue(), valueTypeHint));
 			}
-			return result;
+
+			return new BasicDBObject(converted);
 		}
 
 		if (obj.getClass().isArray()) {
@@ -1197,8 +1225,70 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 		}
 
 		Object object = dbref == null ? null : path.getPathItem(dbref.getId(), dbref.getCollectionName());
+		return (T) (object != null ? object : readAndConvertDBRef(dbref, type, path, rawType));
+	}
 
-		return (T) (object != null ? object : read(type, readRef(dbref), path));
+	private <T> T readAndConvertDBRef(DBRef dbref, TypeInformation<?> type, ObjectPath path, final Class<?> rawType) {
+
+		List<T> result = bulkReadAndConvertDBRefs(Collections.singletonList(dbref), type, path, rawType);
+		return CollectionUtils.isEmpty(result) ? null : result.iterator().next();
+	}
+
+	@SuppressWarnings({ "unchecked", "rawtypes" })
+	private void bulkReadAndConvertDBRefMapIntoTarget(TypeInformation<?> valueType, Class<?> rawValueType,
+			Map<String, Object> sourceMap, Map<Object, Object> targetMap) {
+
+		LinkedHashMap<String, Object> referenceMap = new LinkedHashMap<String, Object>(sourceMap);
+		List<Object> convertedObjects = bulkReadAndConvertDBRefs((List<DBRef>) new ArrayList(referenceMap.values()),
+				valueType, ObjectPath.ROOT, rawValueType);
+		int index = 0;
+
+		for (String key : referenceMap.keySet()) {
+			targetMap.put(key, convertedObjects.get(index));
+			index++;
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	private <T> List<T> bulkReadAndConvertDBRefs(List<DBRef> dbrefs, TypeInformation<?> type, ObjectPath path,
+			final Class<?> rawType) {
+
+		if (CollectionUtils.isEmpty(dbrefs)) {
+			return Collections.emptyList();
+		}
+
+		List<DBObject> referencedRawDocuments = dbrefs.size() == 1
+				? Collections.singletonList(readRef(dbrefs.iterator().next())) : bulkReadRefs(dbrefs);
+		String collectionName = dbrefs.iterator().next().getCollectionName();
+
+		List<T> targeList = new ArrayList<T>(dbrefs.size());
+
+		for (DBObject document : referencedRawDocuments) {
+
+			if (document != null) {
+				maybeEmitEvent(new AfterLoadEvent<T>(document, (Class<T>) rawType, collectionName));
+			}
+
+			final T target = (T) read(type, document, path);
+			targeList.add(target);
+
+			if (target != null) {
+				maybeEmitEvent(new AfterConvertEvent<T>(document, target, collectionName));
+			}
+		}
+
+		return targeList;
+	}
+
+	private void maybeEmitEvent(MongoMappingEvent<?> event) {
+
+		if (canPublishEvent()) {
+			this.applicationContext.publishEvent(event);
+		}
+	}
+
+	private boolean canPublishEvent() {
+		return this.applicationContext != null;
 	}
 
 	/**
@@ -1209,6 +1299,45 @@ public class MappingMongoConverter extends AbstractMongoConverter implements App
 	 */
 	DBObject readRef(DBRef ref) {
 		return dbRefResolver.fetch(ref);
+	}
+
+	/**
+	 * Performs a bulk fetch operation for the given {@link DBRef}s.
+	 *
+	 * @param references must not be {@literal null}.
+	 * @return never {@literal null}.
+	 * @since 1.10
+	 */
+	List<DBObject> bulkReadRefs(List<DBRef> references) {
+		return dbRefResolver.bulkFetch(references);
+	}
+
+	/**
+	 * Returns whether the given {@link Iterable} contains {@link DBRef} instances all pointing to the same collection.
+	 * 
+	 * @param source must not be {@literal null}.
+	 * @return
+	 */
+	private static boolean isCollectionOfDbRefWhereBulkFetchIsPossible(Iterable<Object> source) {
+
+		Assert.notNull(source, "Iterable of DBRefs must not be null!");
+
+		Set<String> collectionsFound = new HashSet<String>();
+
+		for (Object dbObjItem : source) {
+
+			if (!(dbObjItem instanceof DBRef)) {
+				return false;
+			}
+
+			collectionsFound.add(((DBRef) dbObjItem).getCollectionName());
+
+			if (collectionsFound.size() > 1) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	/**

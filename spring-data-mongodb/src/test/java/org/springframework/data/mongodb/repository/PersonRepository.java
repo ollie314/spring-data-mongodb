@@ -1,5 +1,5 @@
 /*
- * Copyright 2010-2015 the original author or authors.
+ * Copyright 2010-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,7 +89,21 @@ public interface PersonRepository extends MongoRepository<Person, String>, Query
 	 */
 	List<Person> findByFirstnameLike(String firstname);
 
+	List<Person> findByFirstnameNotContains(String firstname);
+
+	/**
+	 * Returns all {@link Person}s with a firstname not matching the given one (*-wildcard supported).
+	 *
+	 * @param firstname
+	 * @return
+	 */
+	List<Person> findByFirstnameNotLike(String firstname);
+
 	List<Person> findByFirstnameLikeOrderByLastnameAsc(String firstname, Sort sort);
+
+	List<Person> findBySkillsContains(List<String> skills);
+
+	List<Person> findBySkillsNotContains(List<String> skills);
 
 	@Query("{'age' : { '$lt' : ?0 } }")
 	List<Person> findByAgeLessThan(int age, Sort sort);
@@ -309,7 +323,8 @@ public interface PersonRepository extends MongoRepository<Person, String>, Query
 	 * @see DATAMONGO-745
 	 */
 	@Query("{lastname:?0, address.street:{$in:?1}}")
-	Page<Person> findByCustomQueryLastnameAndAddressStreetInList(String lastname, List<String> streetNames, Pageable page);
+	Page<Person> findByCustomQueryLastnameAndAddressStreetInList(String lastname, List<String> streetNames,
+			Pageable page);
 
 	/**
 	 * @see DATAMONGO-950
@@ -334,19 +349,19 @@ public interface PersonRepository extends MongoRepository<Person, String>, Query
 	 */
 	@Query("{ firstname : { $in : ?0 }}")
 	Stream<Person> findByCustomQueryWithStreamingCursorByFirstnames(List<String> firstnames);
-	
+
 	/**
 	 * @see DATAMONGO-990
 	 */
 	@Query("{ firstname : ?#{[0]}}")
 	List<Person> findWithSpelByFirstnameForSpELExpressionWithParameterIndexOnly(String firstname);
-	
+
 	/**
 	 * @see DATAMONGO-990
 	 */
 	@Query("{ firstname : ?#{[0]}, email: ?#{principal.email} }")
 	List<Person> findWithSpelByFirstnameAndCurrentUserWithCustomQuery(String firstname);
-	
+
 	/**
 	 * @see DATAMONGO-990
 	 */

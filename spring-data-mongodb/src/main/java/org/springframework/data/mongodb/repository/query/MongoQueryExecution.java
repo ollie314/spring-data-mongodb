@@ -18,13 +18,12 @@ package org.springframework.data.mongodb.repository.query;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.function.Function;
 
 import org.springframework.core.convert.converter.Converter;
 import org.springframework.data.convert.EntityInstantiators;
-import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Range;
 import org.springframework.data.domain.Slice;
@@ -39,6 +38,8 @@ import org.springframework.data.mongodb.core.query.NearQuery;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.repository.query.ResultProcessor;
 import org.springframework.data.repository.query.ReturnedType;
+import org.springframework.data.repository.support.PageableExecutionUtils;
+import org.springframework.data.repository.support.PageableExecutionUtils.TotalSupplier;
 import org.springframework.data.util.CloseableIterator;
 import org.springframework.data.util.StreamUtils;
 import org.springframework.data.util.TypeInformation;
@@ -46,6 +47,14 @@ import org.springframework.util.ClassUtils;
 
 import com.mongodb.WriteResult;
 
+/**
+ * Set of classes to contain query execution strategies. Depending (mostly) on the return type of a
+ * {@link org.springframework.data.repository.query.QueryMethod} a {@link AbstractMongoQuery} can be executed in various
+ * flavors.
+ *
+ * @author Oliver Gierke
+ * @author Mark Paluch
+ */
 interface MongoQueryExecution {
 
 	Object execute(Query query, Class<?> type, String collection);
@@ -108,6 +117,7 @@ interface MongoQueryExecution {
 	 * {@link MongoQueryExecution} for pagination queries.
 	 * 
 	 * @author Oliver Gierke
+	 * @author Mark Paluch
 	 */
 	@RequiredArgsConstructor
 	static final class PagedExecution implements MongoQueryExecution {
@@ -120,29 +130,27 @@ interface MongoQueryExecution {
 		 * @see org.springframework.data.mongodb.repository.query.AbstractMongoQuery.Execution#execute(org.springframework.data.mongodb.core.query.Query, java.lang.Class, java.lang.String)
 		 */
 		@Override
-		@SuppressWarnings({ "rawtypes", "unchecked" })
-		public Object execute(Query query, Class<?> type, String collection) {
+		public Object execute(final Query query, final Class<?> type, final String collection) {
 
-			int overallLimit = query.getLimit();
-			long count = operations.count(query, type, collection);
-			count = overallLimit != 0 ? Math.min(count, query.getLimit()) : count;
-
-			boolean pageableOutOfScope = pageable.getOffset() > count;
-
-			if (pageableOutOfScope) {
-				return new PageImpl<Object>(Collections.emptyList(), pageable, count);
-			}
+			final int overallLimit = query.getLimit();
 
 			// Apply raw pagination
-			query = query.with(pageable);
+			query.with(pageable);
 
 			// Adjust limit if page would exceed the overall limit
 			if (overallLimit != 0 && pageable.getOffset() + pageable.getPageSize() > overallLimit) {
 				query.limit(overallLimit - pageable.getOffset());
 			}
 
-			List<?> result = operations.find(query, type, collection);
-			return new PageImpl(result, pageable, count);
+			return PageableExecutionUtils.getPage(operations.find(query, type, collection), pageable, new TotalSupplier() {
+
+				@Override
+				public long get() {
+
+					long count = operations.count(query, type, collection);
+					return overallLimit != 0 ? Math.min(count, overallLimit) : count;
+				}
+			});
 		}
 	}
 
@@ -229,10 +237,16 @@ interface MongoQueryExecution {
 			}
 
 			TypeInformation<?> componentType = returnType.getComponentType();
-			return componentType == null ? false : GeoResult.class.equals(componentType.getType());
+			return componentType != null && GeoResult.class.equals(componentType.getType());
 		}
 	}
 
+	/**
+	 * {@link MongoQueryExecution} to execute geo-near queries with paging.
+	 *
+	 * @author Oliver Gierke
+	 * @author Mark Paluch
+	 */
 	static final class PagingGeoNearExecution extends GeoNearExecution {
 
 		private final MongoOperations operations;
@@ -249,22 +263,32 @@ interface MongoQueryExecution {
 			this.mongoQuery = query;
 		}
 
-		/**
-		 * Executes the given {@link Query} to return a page.
-		 * 
-		 * @param query must not be {@literal null}.
-		 * @param countQuery must not be {@literal null}.
-		 * @return
+		/* 
+		 * (non-Javadoc)
+		 * @see org.springframework.data.mongodb.repository.query.MongoQueryExecution.GeoNearExecution#execute(org.springframework.data.mongodb.core.query.Query, java.lang.Class, java.lang.String)
 		 */
 		@Override
-		public Object execute(Query query, Class<?> type, String collection) {
+		public Object execute(Query query, Class<?> type, final String collection) {
 
-			ConvertingParameterAccessor parameterAccessor = new ConvertingParameterAccessor(operations.getConverter(),
-					accessor);
-			Query countQuery = mongoQuery.applyQueryMetaAttributesWhenPresent(mongoQuery.createCountQuery(parameterAccessor));
-			long count = operations.count(countQuery, collection);
+			GeoResults<Object> geoResults = doExecuteQuery(query, type, collection);
 
-			return new GeoPage<Object>(doExecuteQuery(query, type, collection), accessor.getPageable(), count);
+			Page<GeoResult<Object>> page = PageableExecutionUtils.getPage(geoResults.getContent(), accessor.getPageable(),
+					new TotalSupplier() {
+
+						@Override
+						public long get() {
+
+							ConvertingParameterAccessor parameterAccessor = new ConvertingParameterAccessor(operations.getConverter(),
+									accessor);
+							Query countQuery = mongoQuery
+									.applyQueryMetaAttributesWhenPresent(mongoQuery.createCountQuery(parameterAccessor));
+
+							return operations.count(countQuery, collection);
+						}
+					});
+
+			// transform to GeoPage after applying optimization
+			return new GeoPage<Object>(geoResults, accessor.getPageable(), page.getTotalElements());
 		}
 	}
 

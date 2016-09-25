@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,10 @@ import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
 import org.aopalliance.intercept.MethodInterceptor;
 import org.aopalliance.intercept.MethodInvocation;
@@ -31,6 +35,7 @@ import org.springframework.cglib.proxy.Enhancer;
 import org.springframework.cglib.proxy.Factory;
 import org.springframework.cglib.proxy.MethodProxy;
 import org.springframework.dao.DataAccessException;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.dao.support.PersistenceExceptionTranslator;
 import org.springframework.data.mongodb.LazyLoadingException;
 import org.springframework.data.mongodb.MongoDbFactory;
@@ -40,6 +45,9 @@ import org.springframework.objenesis.ObjenesisStd;
 import org.springframework.util.Assert;
 import org.springframework.util.ReflectionUtils;
 
+import com.mongodb.BasicDBObject;
+import com.mongodb.BasicDBObjectBuilder;
+import com.mongodb.DB;
 import com.mongodb.DBObject;
 import com.mongodb.DBRef;
 
@@ -107,6 +115,40 @@ public class DefaultDbRefResolver implements DbRefResolver {
 	@Override
 	public DBObject fetch(DBRef dbRef) {
 		return ReflectiveDBRefResolver.fetch(mongoDbFactory, dbRef);
+	}
+
+	/*
+	 * (non-Javadoc)
+	 * @see org.springframework.data.mongodb.core.convert.DbRefResolver#bulkFetch(java.util.List)
+	 */
+	@Override
+	public List<DBObject> bulkFetch(List<DBRef> refs) {
+
+		Assert.notNull(mongoDbFactory, "Factory must not be null!");
+		Assert.notNull(refs, "DBRef to fetch must not be null!");
+
+		if (refs.isEmpty()) {
+			return Collections.emptyList();
+		}
+
+		String collection = refs.iterator().next().getCollectionName();
+
+		List<Object> ids = new ArrayList<Object>(refs.size());
+		for (DBRef ref : refs) {
+
+			if (!collection.equals(ref.getCollectionName())) {
+				throw new InvalidDataAccessApiUsageException(
+						"DBRefs must all target the same collection for bulk fetch operation.");
+			}
+
+			ids.add(ref.getId());
+		}
+
+		DB db = mongoDbFactory.getDb();
+		List<DBObject> result = db.getCollection(collection)
+				.find(new BasicDBObjectBuilder().add("_id", new BasicDBObject("$in", ids)).get()).toArray();
+		Collections.sort(result, new DbRefByReferencePositionComparator(ids));
+		return result;
 	}
 
 	/**
@@ -180,8 +222,8 @@ public class DefaultDbRefResolver implements DbRefResolver {
 	 * @author Oliver Gierke
 	 * @author Christoph Strobl
 	 */
-	static class LazyLoadingInterceptor implements MethodInterceptor, org.springframework.cglib.proxy.MethodInterceptor,
-			Serializable {
+	static class LazyLoadingInterceptor
+			implements MethodInterceptor, org.springframework.cglib.proxy.MethodInterceptor, Serializable {
 
 		private static final Method INITIALIZE_METHOD, TO_DBREF_METHOD, FINALIZE_METHOD;
 
@@ -387,11 +429,45 @@ public class DefaultDbRefResolver implements DbRefResolver {
 				} catch (RuntimeException ex) {
 
 					DataAccessException translatedException = this.exceptionTranslator.translateExceptionIfPossible(ex);
-					throw new LazyLoadingException("Unable to lazily resolve DBRef!", translatedException);
+					throw new LazyLoadingException("Unable to lazily resolve DBRef!",
+							translatedException != null ? translatedException : ex);
 				}
 			}
 
 			return result;
+		}
+	}
+
+	/**
+	 * {@link Comparator} for sorting {@link DBObject} that have been loaded in random order by a predefined list of
+	 * reference identifiers.
+	 *
+	 * @author Christoph Strobl
+	 * @author Oliver Gierke
+	 * @since 1.10
+	 */
+	private static class DbRefByReferencePositionComparator implements Comparator<DBObject> {
+
+		private final List<Object> reference;
+
+		/**
+		 * Creates a new {@link DbRefByReferencePositionComparator} for the given list of reference identifiers.
+		 * 
+		 * @param referenceIds must not be {@literal null}.
+		 */
+		public DbRefByReferencePositionComparator(List<Object> referenceIds) {
+
+			Assert.notNull(referenceIds, "Reference identifiers must not be null!");
+			this.reference = new ArrayList<Object>(referenceIds);
+		}
+
+		/*
+		 * (non-Javadoc)
+		 * @see java.util.Comparator#compare(java.lang.Object, java.lang.Object)
+		 */
+		@Override
+		public int compare(DBObject o1, DBObject o2) {
+			return Integer.compare(reference.indexOf(o1.get("_id")), reference.indexOf(o2.get("_id")));
 		}
 	}
 }

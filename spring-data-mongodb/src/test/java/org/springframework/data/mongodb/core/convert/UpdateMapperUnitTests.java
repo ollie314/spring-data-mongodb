@@ -1,5 +1,5 @@
 /*
- * Copyright 2013-2015 the original author or authors.
+ * Copyright 2013-2016 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -63,10 +63,11 @@ import com.mongodb.DBRef;
 
 /**
  * Unit tests for {@link UpdateMapper}.
- * 
+ *
  * @author Oliver Gierke
  * @author Christoph Strobl
  * @author Thomas Darimont
+ * @author Mark Paluch
  */
 @RunWith(MockitoJUnitRunner.class)
 public class UpdateMapperUnitTests {
@@ -370,6 +371,49 @@ public class UpdateMapperUnitTests {
 
 		assertThat(key.containsField("$position"), is(false));
 		assertThat(getAsDBObject(push, "key").containsField("$each"), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-832
+	 */
+	@Test
+	public void updatePushEachWithSliceShouldRenderCorrectly() {
+
+		Update update = new Update().push("key").slice(5).each(Arrays.asList("Arya", "Arry", "Weasel"));
+
+		DBObject mappedObject = mapper.getMappedObject(update.getUpdateObject(), context.getPersistentEntity(Object.class));
+
+		DBObject push = getAsDBObject(mappedObject, "$push");
+		DBObject key = getAsDBObject(push, "key");
+
+		assertThat(key.containsField("$slice"), is(true));
+		assertThat((Integer) key.get("$slice"), is(5));
+		assertThat(key.containsField("$each"), is(true));
+	}
+
+	/**
+	 * @see DATAMONGO-832
+	 */
+	@Test
+	public void updatePushEachWithSliceShouldRenderWhenUsingMultiplePushCorrectly() {
+
+		Update update = new Update().push("key").slice(5).each(Arrays.asList("Arya", "Arry", "Weasel")).push("key-2")
+				.slice(-2).each("The Beggar King", "Viserys III Targaryen");
+
+		DBObject mappedObject = mapper.getMappedObject(update.getUpdateObject(), context.getPersistentEntity(Object.class));
+
+		DBObject push = getAsDBObject(mappedObject, "$push");
+		DBObject key = getAsDBObject(push, "key");
+
+		assertThat(key.containsField("$slice"), is(true));
+		assertThat((Integer) key.get("$slice"), is(5));
+		assertThat(key.containsField("$each"), is(true));
+
+		DBObject key2 = getAsDBObject(push, "key-2");
+
+		assertThat(key2.containsField("$slice"), is(true));
+		assertThat((Integer) key2.get("$slice"), is(-2));
+		assertThat(key2.containsField("$each"), is(true));
 	}
 
 	/**
@@ -687,10 +731,8 @@ public class UpdateMapperUnitTests {
 				context.getPersistentEntity(DomainTypeWrappingConcreteyTypeHavingListOfInterfaceTypeAttributes.class));
 
 		assertThat(mappedUpdate, isBsonObject().notContaining("$set.concreteTypeWithListAttributeOfInterfaceType._class"));
-		assertThat(
-				mappedUpdate,
-				isBsonObject().containing("$set.concreteTypeWithListAttributeOfInterfaceType.models.[0]._class",
-						ModelImpl.class.getName()));
+		assertThat(mappedUpdate, isBsonObject()
+				.containing("$set.concreteTypeWithListAttributeOfInterfaceType.models.[0]._class", ModelImpl.class.getName()));
 	}
 
 	/**
@@ -757,8 +799,8 @@ public class UpdateMapperUnitTests {
 	@Test
 	public void mappingShouldNotContainTypeInformationWhenValueTypeOfMapMatchesDeclaration() {
 
-		Map<Object, NestedDocument> map = Collections.<Object, NestedDocument> singletonMap("jasnah", new NestedDocument(
-				"kholin"));
+		Map<Object, NestedDocument> map = Collections.<Object, NestedDocument> singletonMap("jasnah",
+				new NestedDocument("kholin"));
 
 		Update update = new Update().set("concreteMap", map);
 		DBObject mappedUpdate = mapper.getMappedObject(update.getUpdateObject(),
@@ -885,6 +927,76 @@ public class UpdateMapperUnitTests {
 
 		DBObject $set = DBObjectTestUtils.getAsDBObject(mappedUpdate, "$set");
 		assertThat($set.get("primIntValue"), Is.<Object> is(10));
+	}
+
+	/**
+	 * @see DATAMONGO-1404
+	 */
+	@Test
+	public void mapsMinCorrectly() {
+
+		Update update = new Update().min("minfield", 10);
+		DBObject mappedUpdate = mapper.getMappedObject(update.getUpdateObject(),
+				context.getPersistentEntity(SimpleValueHolder.class));
+
+		assertThat(mappedUpdate, isBsonObject().containing("$min", new BasicDBObject("minfield", 10)));
+	}
+
+	/**
+	 * @see DATAMONGO-1404
+	 */
+	@Test
+	public void mapsMaxCorrectly() {
+
+		Update update = new Update().max("maxfield", 999);
+		DBObject mappedUpdate = mapper.getMappedObject(update.getUpdateObject(),
+				context.getPersistentEntity(SimpleValueHolder.class));
+
+		assertThat(mappedUpdate, isBsonObject().containing("$max", new BasicDBObject("maxfield", 999)));
+	}
+
+	/**
+	 * @see DATAMONGO-1423
+	 */
+	@Test
+	@SuppressWarnings("unchecked")
+	public void mappingShouldConsiderCustomConvertersForEnumMapKeys() {
+
+		CustomConversions conversions = new CustomConversions(
+				Arrays.asList(AllocationToStringConverter.INSTANCE, StringToAllocationConverter.INSTANCE));
+
+		MongoMappingContext mappingContext = new MongoMappingContext();
+		mappingContext.setSimpleTypeHolder(conversions.getSimpleTypeHolder());
+		mappingContext.afterPropertiesSet();
+
+		MappingMongoConverter converter = new MappingMongoConverter(mock(DbRefResolver.class), mappingContext);
+		converter.setCustomConversions(conversions);
+		converter.afterPropertiesSet();
+
+		UpdateMapper mapper = new UpdateMapper(converter);
+
+		Update update = new Update().set("enumAsMapKey", Collections.singletonMap(Allocation.AVAILABLE, 100));
+		DBObject result = mapper.getMappedObject(update.getUpdateObject(),
+				mappingContext.getPersistentEntity(ClassWithEnum.class));
+
+		assertThat(result, isBsonObject().containing("$set.enumAsMapKey.V", 100));
+	}
+
+	/**
+	 * @see DATAMONGO-1486
+	 */
+	@Test
+	public void mappingShouldConvertMapKeysToString() {
+
+		Update update = new Update().set("map", Collections.singletonMap(25, "#StarTrek50"));
+		DBObject mappedUpdate = mapper.getMappedObject(update.getUpdateObject(),
+				context.getPersistentEntity(EntityWithObjectMap.class));
+
+		DBObject mapToSet = getAsDBObject(getAsDBObject(mappedUpdate, "$set"), "map");
+
+		for (Object key : mapToSet.keySet()) {
+			assertThat(key, is(instanceOf(String.class)));
+		}
 	}
 
 	static class DomainTypeWrappingConcreteyTypeHavingListOfInterfaceTypeAttributes {
@@ -1113,6 +1225,7 @@ public class UpdateMapperUnitTests {
 	static class ClassWithEnum {
 
 		Allocation allocation;
+		Map<Allocation, String> enumAsMapKey;
 
 		static enum Allocation {
 

@@ -1,6 +1,100 @@
 Spring Data MongoDB Changelog
 =============================
 
+Changes in version 1.8.5.RELEASE (2016-09-20)
+---------------------------------------------
+* DATAMONGO-1494 - Release 1.8.5 (Gosling SR5).
+* DATAMONGO-1492 - Interface AggregationExpression in package org.springframework.data.mongodb.core.aggregation should be public.
+* DATAMONGO-1485 - Querydsl MongodbSerializer does not take registered converters for Enums into account.
+* DATAMONGO-1479 - MappingMongoConverter.convertToMongoType causes StackOverflowError for parameterized map value types.
+* DATAMONGO-1471 - MappingMongoConverter attempts to set null value on potentially primitive identifier.
+* DATAMONGO-1465 - String arguments passed to DefaultScriptOperations.execute() appear quoted in script.
+* DATAMONGO-1453 - Parse error into GeoJsonPoint if coordinates are "integers".
+* DATAMONGO-1449 - Replace legacy for loop with foreach in MappingMongoConverter.
+* DATAMONGO-1445 - @Id annotated attribute of type BigInteger does not work with query methods.
+* DATAMONGO-1437 - DefaultDbRefResolver swallows cause of non DataAccessException translatable Exception.
+* DATAMONGO-1425 - NOT_CONTAINS keyword issues CONTAINS query.
+* DATAMONGO-1423 - Nested document update doesn't apply converters on embedded maps.
+* DATAMONGO-1412 - Document mapping rules for Java types to MongoDB representation.
+* DATAMONGO-1406 - Query mapper does not use @Field field name when querying nested fields in combination with nested keywords.
+* DATAMONGO-1401 - GeoJsonPoint error on update.
+
+
+Changes in version 1.9.3.RELEASE (2016-09-20)
+---------------------------------------------
+* DATAMONGO-1493 - Typos in reference documentation.
+* DATAMONGO-1492 - Interface AggregationExpression in package org.springframework.data.mongodb.core.aggregation should be public.
+* DATAMONGO-1486 - Changes to MappingMongoConverter Result in Class Cast Exception.
+* DATAMONGO-1485 - Querydsl MongodbSerializer does not take registered converters for Enums into account.
+* DATAMONGO-1479 - MappingMongoConverter.convertToMongoType causes StackOverflowError for parameterized map value types.
+* DATAMONGO-1471 - MappingMongoConverter attempts to set null value on potentially primitive identifier.
+* DATAMONGO-1465 - String arguments passed to DefaultScriptOperations.execute() appear quoted in script.
+* DATAMONGO-1463 - Upgrade to MongoDB Java driver 2.14.3.
+* DATAMONGO-1453 - Parse error into GeoJsonPoint if coordinates are "integers".
+* DATAMONGO-1450 - Release 1.9.3 (Hopper SR3).
+* DATAMONGO-1406 - Query mapper does not use @Field field name when querying nested fields in combination with nested keywords.
+
+
+Changes in version 1.10.0.M1 (2016-07-27)
+-----------------------------------------
+* DATAMONGO-1464 - Pagination - Optimize out the count query for paging.
+* DATAMONGO-1463 - Upgrade to MongoDB Java driver 2.14.3.
+* DATAMONGO-1462 - Integrate version badge from spring.io.
+* DATAMONGO-1460 - User placeholder property for JSR-303 API.
+* DATAMONGO-1459 - Add support for any-match mode in query-by-example.
+* DATAMONGO-1457 - Add support for $slice in projection stage of aggregation.
+* DATAMONGO-1456 - Add support for $diacriticInsensitivity to text search.
+* DATAMONGO-1455 - Add support for $caseSensitive to text search.
+* DATAMONGO-1453 - Parse error into GeoJsonPoint if coordinates are "integers".
+* DATAMONGO-1449 - Replace legacy for loop with foreach in MappingMongoConverter.
+* DATAMONGO-1437 - DefaultDbRefResolver swallows cause of non DataAccessException translatable Exception.
+* DATAMONGO-1431 - Add overload of MongoOperations.stream(…) to take an explicit collection name.
+* DATAMONGO-1425 - NOT_CONTAINS keyword issues CONTAINS query.
+* DATAMONGO-1424 - Add support for "notLike" keyword in derived queries.
+* DATAMONGO-1423 - Nested document update doesn't apply converters on embedded maps.
+* DATAMONGO-1420 - Update Spring Data MongoDB version in Github readme.
+* DATAMONGO-1419 - Remove deprecations in AbstractMongoEventListener.
+* DATAMONGO-1418 - Add support for $out operand for Aggregation.
+* DATAMONGO-1416 - Standard bootstrap issues warning in converter registration.
+* DATAMONGO-1412 - Document mapping rules for Java types to MongoDB representation.
+* DATAMONGO-1411 - Enable MongoDB build on TravisCI.
+* DATAMONGO-1409 - Release 1.10 M1 (Ingalls).
+* DATAMONGO-1404 - Add support of $max and $min update operations.
+* DATAMONGO-1403 - Add maxExecutionTimeMs alias for @Meta(maxExcecutionTime).
+* DATAMONGO-1399 - Allow adding hole to GeoJson Polygon.
+* DATAMONGO-1394 - References not handled correctly when using QueryDSL.
+* DATAMONGO-1391 - Support Mongo 3.2 syntax for $unwind in aggregation.
+* DATAMONGO-1271 - Provide read lifecycle events when loading DBRefs.
+* DATAMONGO-1194 - Improve DBRef resolution for collections.
+* DATAMONGO-832 - Add support for $slice in Update.push.
+
+
+Changes in version 1.9.2.RELEASE (2016-06-15)
+---------------------------------------------
+* DATAMONGO-1449 - Replace legacy for loop with foreach in MappingMongoConverter.
+* DATAMONGO-1437 - DefaultDbRefResolver swallows cause of non DataAccessException translatable Exception.
+* DATAMONGO-1425 - NOT_CONTAINS keyword issues CONTAINS query.
+* DATAMONGO-1423 - Nested document update doesn't apply converters on embedded maps.
+* DATAMONGO-1416 - Standard bootstrap issues warning in converter registration.
+* DATAMONGO-1412 - Document mapping rules for Java types to MongoDB representation.
+* DATAMONGO-1411 - Enable MongoDB build on TravisCI.
+* DATAMONGO-1410 - Release 1.9.2 (Hopper SR2).
+
+
+Changes in version 1.9.1.RELEASE (2016-04-06)
+---------------------------------------------
+* DATAMONGO-1408 - Release 1.9.1 (Hopper SR1).
+
+
+Changes in version 1.9.0.RELEASE (2016-04-06)
+---------------------------------------------
+* DATAMONGO-1407 - Add pull request template.
+* DATAMONGO-1405 - Release 1.9 GA (Hopper).
+* DATAMONGO-1401 - GeoJsonPoint error on update.
+* DATAMONGO-1398 - Update documentation for Spring Data MongoDB 1.9.
+* DATAMONGO-1396 - Exception when creating geo within Criteria using Aggregation.
+
+
 Changes in version 1.9.0.RC1 (2016-03-18)
 -----------------------------------------
 * DATAMONGO-1400 - Adapt to rename of Spring Data Commons' Tuple to Pair.
